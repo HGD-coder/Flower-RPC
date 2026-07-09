@@ -1,7 +1,11 @@
 package com.github.hgdcoder.remoting.dto;
 
 import com.github.hgdcoder.enums.RpcResponseCodeEnum;
-import lombok.*;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+import lombok.ToString;
 
 import java.io.Serializable;
 
@@ -12,32 +16,34 @@ import java.io.Serializable;
 @ToString
 public class RpcResponse<T> implements Serializable {
     private static final long serialVersionUID = 1L;
+
     private String requestId;
-    //response code
     private Integer code;
-    //response message
     private String message;
-    //response body
     private T data;
 
-
     public static <T> RpcResponse<T> success(T data, String requestId) {
-        RpcResponse<T> response=new RpcResponse<>();
+        RpcResponse<T> response = new RpcResponse<>();
         response.setCode(RpcResponseCodeEnum.SUCCESS.getCode());
         response.setMessage(RpcResponseCodeEnum.SUCCESS.getMessage());
         response.setRequestId(requestId);
-        if(null!=data){
-            response.setData(data);
-        }
+        response.setData(data);
         return response;
     }
 
-
-    //Todo 搞清楚fail时候是否要传入参数requestId并返回
     public static <T> RpcResponse<T> fail(RpcResponseCodeEnum rpcResponseCodeEnum) {
-        RpcResponse<T> response =new RpcResponse<>();
+        return fail(rpcResponseCodeEnum, null, rpcResponseCodeEnum.getMessage());
+    }
+
+    public static <T> RpcResponse<T> fail(
+            RpcResponseCodeEnum rpcResponseCodeEnum,
+            String requestId,
+            String message
+    ) {
+        RpcResponse<T> response = new RpcResponse<>();
         response.setCode(rpcResponseCodeEnum.getCode());
-        response.setMessage(rpcResponseCodeEnum.getMessage());
+        response.setMessage(message == null ? rpcResponseCodeEnum.getMessage() : message);
+        response.setRequestId(requestId);
         return response;
     }
 }
