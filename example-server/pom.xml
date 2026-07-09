@@ -4,27 +4,22 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>com.github.hgdcoder</groupId>
-    <artifactId>example-server</artifactId>
-    <version>1.0-SNAPSHOT</version>
+    <parent>
+        <groupId>com.github.hgdcoder</groupId>
+        <artifactId>flower-rpc</artifactId>
+        <version>1.0-SNAPSHOT</version>
+    </parent>
 
-    <properties>
-        <maven.compiler.source>8</maven.compiler.source>
-        <maven.compiler.target>8</maven.compiler.target>
-        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    </properties>
+    <artifactId>example-server</artifactId>
+
     <dependencies>
         <dependency>
             <groupId>com.github.hgdcoder</groupId>
             <artifactId>hello-service-api</artifactId>
-            <version>1.0-SNAPSHOT</version>
-            <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>com.github.hgdcoder</groupId>
             <artifactId>rpc-framework-simple</artifactId>
-            <version>1.0-SNAPSHOT</version>
-            <scope>compile</scope>
         </dependency>
     </dependencies>
 
