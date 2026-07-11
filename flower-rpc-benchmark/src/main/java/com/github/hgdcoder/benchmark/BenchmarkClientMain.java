@@ -3,6 +3,7 @@ package com.github.hgdcoder.benchmark;
 import com.github.hgdcoder.Hello;
 import com.github.hgdcoder.HelloService;
 import com.github.hgdcoder.proxy.RpcClientProxy;
+import com.github.hgdcoder.registry.file.FileServiceDiscovery;
 import com.github.hgdcoder.transport.socket.SocketRpcClient;
 
 import java.util.ArrayList;
@@ -23,7 +24,7 @@ public class BenchmarkClientMain {
         int durationSeconds = intArg(args, "--duration", 30);
         int warmupSeconds = intArg(args, "--warmup", 5);
 
-        SocketRpcClient client = new SocketRpcClient("127.0.0.1", 9998);
+        SocketRpcClient client = new SocketRpcClient(new FileServiceDiscovery());
         RpcClientProxy proxy = new RpcClientProxy(client, "test", "1.0");
         HelloService helloService = proxy.getProxy(HelloService.class);
 

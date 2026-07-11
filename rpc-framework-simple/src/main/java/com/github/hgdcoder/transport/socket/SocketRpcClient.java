@@ -1,5 +1,6 @@
 package com.github.hgdcoder.transport.socket;
 
+import com.github.hgdcoder.registry.ServiceDiscovery;
 import com.github.hgdcoder.remoting.dto.RpcRequest;
 import com.github.hgdcoder.transport.RpcRequestTransport;
 
@@ -13,70 +14,111 @@ public class SocketRpcClient implements RpcRequestTransport {
     private static final int DEFAULT_CONNECT_TIMEOUT_MILLIS = 3000;
     private static final int DEFAULT_READ_TIMEOUT_MILLIS = 5000;
 
-    private final String host;
-    private final int port;
-    private final int connectTimeoutMillis;
-    private final int readTimeoutMillis;
+    /**
+     * Finds the remote service address by rpcServiceName.
+     * V4 keeps only the discovery-based client flow.
+     */
+    private final ServiceDiscovery serviceDiscovery;
 
-    // One connection per caller thread. This avoids multiple threads reading and
-    // writing the same ObjectInputStream/ObjectOutputStream at the same time.
+    /**
+     * One connection per caller thread.
+     * ObjectInputStream/ObjectOutputStream are not safe to share for concurrent
+     * request-response reads, so each benchmark worker keeps its own socket.
+     */
     private final ThreadLocal<SocketConnection> connectionHolder = new ThreadLocal<>();
 
-    public SocketRpcClient(String host, int port) {
-        this(host, port, DEFAULT_CONNECT_TIMEOUT_MILLIS, DEFAULT_READ_TIMEOUT_MILLIS);
+    /**
+     * V4 usage:
+     * new SocketRpcClient(new FileServiceDiscovery())
+     */
+    public SocketRpcClient(ServiceDiscovery serviceDiscovery) {
+        this.serviceDiscovery = serviceDiscovery;
     }
 
-    public SocketRpcClient(String host, int port, int connectTimeoutMillis, int readTimeoutMillis) {
-        this.host = host;
-        this.port = port;
-        this.connectTimeoutMillis = connectTimeoutMillis;
-        this.readTimeoutMillis = readTimeoutMillis;
-    }
-
+    /**
+     * Sends one RPC request.
+     *
+     * Call chain:
+     * RpcClientProxy.invoke(...)
+     * -> SocketRpcClient.sendRpcRequest(...)
+     * -> serviceDiscovery.lookupService(...)
+     * -> SocketConnection.send(...)
+     */
     @Override
     public Object sendRpcRequest(RpcRequest rpcRequest) {
-        SocketConnection connection = getOrCreateConnection();
+        InetSocketAddress address = serviceDiscovery.lookupService(rpcRequest.getRpcServiceName());
+        SocketConnection connection = getOrCreateConnection(address);
 
         try {
             return connection.send(rpcRequest);
         } catch (Exception e) {
+            // Drop the current thread's broken connection. The next request will
+            // create a fresh one.
             closeCurrentConnection();
             throw new RuntimeException("Send rpc request failed", e);
         }
     }
 
-    private SocketConnection getOrCreateConnection() {
+    /**
+     * Reuses the current thread's connection when it still points to the same
+     * service address; otherwise creates a new socket connection.
+     */
+    private SocketConnection getOrCreateConnection(InetSocketAddress address) {
         SocketConnection connection = connectionHolder.get();
-        if (connection == null || !connection.isAvailable()) {
-            connection = new SocketConnection(host, port, connectTimeoutMillis, readTimeoutMillis);
+
+        if (connection == null || !connection.isAvailable() || !connection.isSameAddress(address)) {
+            closeCurrentConnection();
+            connection = new SocketConnection(
+                    address.getHostString(),
+                    address.getPort(),
+                    DEFAULT_CONNECT_TIMEOUT_MILLIS,
+                    DEFAULT_READ_TIMEOUT_MILLIS
+            );
             connectionHolder.set(connection);
         }
+
         return connection;
     }
 
+    /**
+     * Closes the connection owned by the current thread.
+     */
     public void closeCurrentConnection() {
         SocketConnection connection = connectionHolder.get();
+
         if (connection != null) {
             connection.close();
             connectionHolder.remove();
         }
     }
 
+    /**
+     * A real socket connection that owns its input/output object streams.
+     */
     private static class SocketConnection implements Closeable {
+        private final String host;
+        private final int port;
         private final Socket socket;
+
         private ObjectOutputStream out;
         private ObjectInputStream in;
 
         SocketConnection(String host, int port, int connectTimeoutMillis, int readTimeoutMillis) {
+            this.host = host;
+            this.port = port;
+
             try {
                 socket = new Socket();
+                // Reduce latency for small request-response messages.
                 socket.setTcpNoDelay(true);
                 socket.connect(new InetSocketAddress(host, port), connectTimeoutMillis);
                 socket.setSoTimeout(readTimeoutMillis);
 
-                // Both client and server create ObjectOutputStream first and flush
-                // the stream header, then create ObjectInputStream. This avoids
-                // both sides blocking while waiting for the other side's header.
+                /*
+                 * ObjectOutputStream writes a stream header when it is created,
+                 * while ObjectInputStream waits for the peer's header. Creating
+                 * output first on both sides avoids a stream-header deadlock.
+                 */
                 out = new ObjectOutputStream(socket.getOutputStream());
                 out.flush();
                 in = new ObjectInputStream(socket.getInputStream());
@@ -86,15 +128,20 @@ public class SocketRpcClient implements RpcRequestTransport {
             }
         }
 
+        /**
+         * Sends one RpcRequest and waits for the matching RpcResponse.
+         */
         Object send(RpcRequest rpcRequest) throws Exception {
             out.writeObject(rpcRequest);
             out.flush();
-            // Clear ObjectOutputStream's handle table so long-lived streams do not
-            // keep growing and later writes are serialized as fresh objects.
+            // Clear the object handle table for long-lived streams.
             out.reset();
             return in.readObject();
         }
 
+        /**
+         * Checks whether this socket can still be reused.
+         */
         boolean isAvailable() {
             return socket != null
                     && socket.isConnected()
@@ -103,6 +150,17 @@ public class SocketRpcClient implements RpcRequestTransport {
                     && !socket.isOutputShutdown();
         }
 
+        /**
+         * A discovered service may move to another address, so the cached
+         * connection is reused only when the address still matches.
+         */
+        boolean isSameAddress(InetSocketAddress address) {
+            return host.equals(address.getHostString()) && port == address.getPort();
+        }
+
+        /**
+         * Closes connection resources quietly.
+         */
         @Override
         public void close() {
             closeQuietly(in);
