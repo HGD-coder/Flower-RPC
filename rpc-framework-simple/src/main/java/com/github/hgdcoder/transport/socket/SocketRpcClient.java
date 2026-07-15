@@ -46,7 +46,7 @@ public class SocketRpcClient implements RpcRequestTransport {
      */
     @Override
     public Object sendRpcRequest(RpcRequest rpcRequest) {
-        InetSocketAddress address = serviceDiscovery.lookupService(rpcRequest.getRpcServiceName());
+        InetSocketAddress address = serviceDiscovery.lookupService(rpcRequest);
         SocketConnection connection = getOrCreateConnection(address);
 
         try {

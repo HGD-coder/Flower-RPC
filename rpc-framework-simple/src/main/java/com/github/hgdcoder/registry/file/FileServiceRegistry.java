@@ -17,8 +17,14 @@ public class FileServiceRegistry implements ServiceRegistry {
             Path file = FileRegistryConfig.registryFile();
             Properties properties = load(file);
 
+            //com.github.hgdcoder.HelloServicetest1.0=127.0.0.1:9998,127.0.0.1:9999 多个地址
             String value = address.getHostString() + ":" + address.getPort();
-            properties.setProperty(rpcServiceName, value);
+            String oldValue = properties.getProperty(rpcServiceName);
+            if (oldValue == null || oldValue.trim().isEmpty()) {
+                properties.setProperty(rpcServiceName, value);
+            } else if (!containsAddress(oldValue, value)) {
+                properties.setProperty(rpcServiceName, oldValue + "," + value);
+            }
 
             Path parent = file.getParent();
             if (parent != null) {
@@ -43,5 +49,17 @@ public class FileServiceRegistry implements ServiceRegistry {
         }
 
         return properties;
+    }
+
+    private boolean containsAddress(String oldValue, String address) {
+        String[] addresses = oldValue.split(",");
+
+        for (String item : addresses) {
+            if (address.equals(item.trim())) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

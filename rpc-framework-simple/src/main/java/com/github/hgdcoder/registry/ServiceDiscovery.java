@@ -1,12 +1,15 @@
 package com.github.hgdcoder.registry;
 
+import com.github.hgdcoder.remoting.dto.RpcRequest;
+
 import java.net.InetSocketAddress;
 
 public interface ServiceDiscovery {
     /**
-     * 根据 rpcServiceName 获取远程服务地址
-     * @param rpcServiceName 完整的服务名称（class name+group+version）
-     * @return 远程服务地址
+     * V5 开始，服务发现需要拿到完整 RpcRequest。
+     *
+     * 原因：
+     * 负载均衡可能会用 requestId、interfaceName、methodName 等信息做选择。
      */
-    InetSocketAddress lookupService(String rpcServiceName);
+    InetSocketAddress lookupService(RpcRequest rpcRequest);
 }

@@ -1,301 +1,180 @@
 package com.github.hgdcoder.loadbalance.loadbalancer;
 
-import com.github.hgdcoder.factory.SingletonFactory;
 import com.github.hgdcoder.loadbalance.AbstractLoadBalance;
 import com.github.hgdcoder.remoting.dto.RpcRequest;
-import lombok.extern.slf4j.Slf4j;
 
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.SortedMap;
+import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
 
-@Slf4j
+/**
+ * ConsistentHashLoadBalance
+ * │
+ * └── selectors: ConcurrentHashMap
+ *     │
+ *     ├── "HelloServicetest1.0"
+ *     │   └── ConsistentHashSelector
+ *     │       ├── addressSignature
+ *     │       │   └── "127.0.0.1:9998,127.0.0.1:9999,127.0.0.1:10000"
+ *     │       │
+ *     │       └── virtualNodes: TreeMap
+ *     │           ├── 1001 -> "127.0.0.1:9998"
+ *     │           ├── 1530 -> "127.0.0.1:10000"
+ *     │           ├── 2205 -> "127.0.0.1:9999"
+ *     │           ├── 3199 -> "127.0.0.1:9998"
+ *     │           └── ...
+ *     │
+ *     └── "OrderServicetest1.0"
+ *         └── ConsistentHashSelector
+ *             ├── addressSignature
+ *             └── virtualNodes: TreeMap
+ */
+
+
 public class ConsistentHashLoadBalance extends AbstractLoadBalance {
-    private final ConcurrentHashMap<String,ConsistentHashingLoadBalancer> selectors=new ConcurrentHashMap<>();
+    /**
+     * 每个服务缓存一个一致性哈希选择器。
+     *
+     * key: rpcServiceName，例如 com.github.hgdcoder.HelloServicetest1.0
+     * value: 这个服务对应的哈希环
+     */
+    private final ConcurrentHashMap<String, ConsistentHashSelector> selectors = new ConcurrentHashMap<>();
 
-    //重构次数，测试使用
-    public static AtomicInteger count=new AtomicInteger();
-
-    //创建次数，测试使用
-    public static AtomicInteger createCount=new AtomicInteger();
+    /**
+     * 每个真实服务地址对应多少个虚拟节点。
+     *
+     * 虚拟节点越多，分布越均匀；
+     * 但构建哈希环的成本也越高。
+     */
+    private static final int VIRTUAL_NODE_COUNT = 160;
 
     @Override
-    protected String doSelect(List<String> serviceAddresses, RpcRequest rpcRequest){
-        String rpcServiceName=rpcRequest.getRpcServiceName();
-        //1.获得hash选择器
-        ConsistentHashingLoadBalancer selector=selectors.get(rpcServiceName);
-        if(selector==null){
-            //2.如果没有，就新建hash环，使用单例工厂模式进行创建
-            selector = SingletonFactory.getInstance(
-                    ()->new ConsistentHashingLoadBalancer(
-                            serviceAddresses,
-                            160,
-                            new ConsistentHashingLoadBalancer.MD5HashFunction()),
-                            ConsistentHashingLoadBalancer.class);
-            selectors.put(rpcServiceName,selector);
-        }else if(selector.hasChanged(serviceAddresses)){
-            //3.如果地址变了
-            selector=selectors.get(rpcServiceName);
-            selector.reBuild(serviceAddresses);
+    protected String doSelect(List<String> serviceAddresses, RpcRequest rpcRequest) {
+        String rpcServiceName = rpcRequest.getRpcServiceName();
+
+        // 计算当前服务地址列表的签名。
+        // 作用：判断服务地址有没有变化。
+        String addressSignature = buildAddressSignature(serviceAddresses);
+
+        ConsistentHashSelector selector = selectors.get(rpcServiceName);
+
+        // 第一次访问，或者服务地址列表变化了，就重建哈希环。
+        if (selector == null || !selector.matches(addressSignature)) {
+            selector = new ConsistentHashSelector(
+                    serviceAddresses,
+                    VIRTUAL_NODE_COUNT,
+                    addressSignature
+            );
+            selectors.put(rpcServiceName, selector);
         }
-        //使用请求的uuid进行hash
-        return selector.selectNode(rpcServiceName+rpcRequest.getRequestId());
+
+        // 当前阶段用 requestId 做负载均衡 key。
+        // 这样不同请求会比较均匀地落到不同服务节点。
+        String requestKey = rpcServiceName + "#" + rpcRequest.getRequestId();
+
+        return selector.select(requestKey);
     }
 
+    /**
+     * 为服务地址列表生成一个稳定签名。
+     *
+     * 为什么要排序？
+     *
+     * 127.0.0.1:9998,127.0.0.1:9999
+     * 和
+     * 127.0.0.1:9999,127.0.0.1:9998
+     *
+     * 本质上是同一批服务地址，不应该因为顺序不同就重建哈希环。
+     * buildAddressSignature 是哈希环缓存的“版本号”。地址集合没变就复用，地址集合变了才重建
+     */
+    private String buildAddressSignature(List<String> serviceAddresses) {
+        List<String> sortedAddresses = new ArrayList<>(serviceAddresses);
+        Collections.sort(sortedAddresses);
+        return String.join(",", sortedAddresses);
+    }
 
-    static class ConsistentHashingLoadBalancer{
+    /**
+     * 某一个服务对应的一致性哈希选择器。
+     *
+     * 一个 selector 里保存一张哈希环。
+     */
+    private static class ConsistentHashSelector {
         /**
-         * 哈希环：使用TreeMap存储虚拟节点的哈希值到物理节点的映射
-         * 1.虚拟节点
-         * 2.hash函数
-         * 3.TreeMap存储节点
-         * 4.物理节点列表
+         * 哈希环。
+         *
+         * key: 虚拟节点 hash 值
+         * value: 真实服务地址，例如 127.0.0.1:9998
          */
-        private final TreeMap<Long,String> virtualNodes = new TreeMap<>();
-        private final Set<String> physicalNodes=new HashSet<>();
-        private final int virtualNodeCount;
-        private final HashFunction hashFunction;
-
-        /**
-         * 读写锁（公平模式）：selectNode 拿读锁，reBuild 拿写锁。
-         * 公平模式下先到先得，避免密集读请求导致写锁（reBuild）饿死。
-         * 代价是吞吐略降，但负载均衡对正确性要求高于极致性能。
-         */
-        private final ReentrantReadWriteLock rwLock = new ReentrantReadWriteLock(true);
-
-        //构造函数，在初始化时候，就需要进行hash环的构建了
-        public ConsistentHashingLoadBalancer(List<String> invokers,
-                                             int virtualNodeCount,
-                                             HashFunction hashFunction){
-            log.info("创建服务的服务器");
-            this.virtualNodeCount=virtualNodeCount;
-            this.hashFunction=hashFunction;
-            //1.构建hash环
-            for(String addr:invokers){
-                this.addNode(addr);
-            }
-            //2.初始化完成
-            createCount.getAndIncrement();
-        }
+        private final TreeMap<Long, String> virtualNodes = new TreeMap<>();
 
         /**
-         * 添加物理节点
-         * @param node
+         * 当前服务地址列表的签名。
+         *
+         * 后续如果签名变了，说明服务节点列表变了，
+         * 需要重新构建 selector。
          */
-        private void addNode(String node){
-            if(physicalNodes.contains(node)){
-                return;
-            }
-            physicalNodes.add(node);
+        private final String addressSignature;
 
-            //为每一个物理节点创建虚拟节点
-            for(int i=0;i<virtualNodeCount;i++){
-                String virtualNodeName = node +"#"+i;
-                long hash=hashFunction.hash(virtualNodeName);
-                virtualNodes.put(hash,node);
-            }
-        }
+        ConsistentHashSelector(List<String> serviceAddresses,
+                               int virtualNodeCount,
+                               String addressSignature) {
+            this.addressSignature = addressSignature;
 
-        private void removeNode(String node){
-            if(!physicalNodes.contains(node)){
-                return;
-            }
-            physicalNodes.remove(node);
-
-            //移除该物理节点对应的所有虚拟节点
-            for(int i=0;i<virtualNodeCount;i++){
-                String virtualNodeName = node +"#"+i;
-                long hash=hashFunction.hash(virtualNodeName);
-                virtualNodes.remove(hash);
-            }
-        }
-
-        /**
-         * 判断地址是否已经发生了变化，不用加上锁
-         * @param address
-         * @return
-         */
-        public boolean hasChanged(List<String> address) {
-            if (address.size() != this.physicalNodes.size()) {
-                return true;
-            }
-            for (String addr: address) {
-                if (!this.physicalNodes.contains(addr)) {
-                    return true;
+            for (String serviceAddress : serviceAddresses) {
+                for (int i = 0; i < virtualNodeCount; i++) {
+                    String virtualNodeName = serviceAddress + "#" + i;
+                    long hash = hash(virtualNodeName);
+                    virtualNodes.put(hash, serviceAddress);
                 }
             }
-            return false;
         }
 
-        /**
-         * 根据请求的key选择节点
-         */
-        public String selectNode(String key) {
-            rwLock.readLock().lock();
+        boolean matches(String newAddressSignature) {
+            return addressSignature.equals(newAddressSignature);
+        }
+
+        String select(String requestKey) {
+            long requestHash = hash(requestKey);
+
+            // 找到哈希环上第一个 >= requestHash 的虚拟节点。
+            SortedMap<Long, String> tailMap = virtualNodes.tailMap(requestHash);
+
+            Long selectedHash;
+
+            if (tailMap.isEmpty()) {
+                // 如果 requestHash 比所有虚拟节点都大，
+                // 就回到哈希环的第一个节点。
+                selectedHash = virtualNodes.firstKey();
+            } else {
+                selectedHash = tailMap.firstKey();
+            }
+
+            return virtualNodes.get(selectedHash);
+        }
+
+        private static long hash(String key) {
             try {
-                if(virtualNodes.isEmpty()){
-                    return null;
-                }
-                long keyHash = hashFunction.hash(key);
-                //顺时针找到第一个大于等于keyHash的虚拟节点，获取键值对
-                SortedMap<Long,String> tailMap=virtualNodes.tailMap(keyHash);
-                Long nodeHash=tailMap.isEmpty()?virtualNodes.firstKey():tailMap.firstKey();
-                return virtualNodes.get(nodeHash);
-            } finally {
-                rwLock.readLock().unlock();
+                MessageDigest md5 = MessageDigest.getInstance("MD5");
+                byte[] digest = md5.digest(key.getBytes(StandardCharsets.UTF_8));
+
+                // 取 MD5 前 8 个字节，拼成一个 long。
+                // & 0xFF 是为了把 Java 的有符号 byte 转成 0~255 的无符号值。
+                return ((long) (digest[0] & 0xFF) << 56)
+                        | ((long) (digest[1] & 0xFF) << 48)
+                        | ((long) (digest[2] & 0xFF) << 40)
+                        | ((long) (digest[3] & 0xFF) << 32)
+                        | ((long) (digest[4] & 0xFF) << 24)
+                        | ((long) (digest[5] & 0xFF) << 16)
+                        | ((long) (digest[6] & 0xFF) << 8)
+                        | (digest[7] & 0xFF);
+            } catch (Exception e) {
+                throw new RuntimeException("Calculate hash failed", e);
             }
         }
-
-
-        public void reBuild(List<String> address) {
-            rwLock.writeLock().lock();
-            try {
-                // DCL：再次检查是否真的变了（可能已被其他线程重建过）
-                if(!this.hasChanged(address)){
-                    return;
-                }
-                log.info("重构服务的选择器");
-                count.getAndIncrement();
-
-                // 1. 找出新增和删除的节点
-                Set<String> currentAddress = new HashSet<>(address);
-                Set<String> preAddress = new HashSet<>(this.physicalNodes);
-
-                List<String> readyToRemove = new ArrayList<>();
-                List<String> readyToAdd = new ArrayList<>();
-                for (String addr : address) {
-                    if (!preAddress.contains(addr)) {
-                        readyToAdd.add(addr);
-                    }
-                }
-                for (String addr : this.physicalNodes) {
-                    if (!currentAddress.contains(addr)) {
-                        readyToRemove.add(addr);
-                    }
-                }
-
-                // 2. 增量增删
-                for (String r : readyToRemove) {
-                    this.removeNode(r);
-                }
-                for (String a : readyToAdd) {
-                    this.addNode(a);
-                }
-                log.info("重新构建的列表大小:{}", this.physicalNodes.size());
-            } finally {
-                rwLock.writeLock().unlock();
-            }
-        }
-
-        public List<String> getAllNodes() {
-            rwLock.readLock().lock();
-            try {
-                return Collections.unmodifiableList(new ArrayList<>(physicalNodes));
-            } finally {
-                rwLock.readLock().unlock();
-            }
-        }
-
-
-
-        /**
-         * 哈希函数接口
-         */
-        public interface HashFunction{
-            long hash(String key);
-        }
-
-        public static class MD5HashFunction implements HashFunction{
-            @Override
-            public long hash(String key) {
-                try{
-                    //MD5为16个字节
-                    MessageDigest md5 = MessageDigest.getInstance("MD5");
-                    byte[] digest=md5.digest(key.getBytes());
-
-                    //取前8个字节作为long类型的哈希值（按大端序拼成64位整数）
-                    return  ((long) (digest[0] & 0xFF) << 56) |
-                            ((long) (digest[1] & 0xFF) << 48) |
-                            ((long) (digest[2] & 0xFF) << 40) |
-                            ((long) (digest[3] & 0xFF) << 32) |
-                            ((long) (digest[4] & 0xFF) << 24) |
-                            ((long) (digest[5] & 0xFF) << 16) |
-                            ((long) (digest[6] & 0xFF) << 8) |
-                            (digest[7] & 0xFF);
-                }catch (NoSuchAlgorithmException e){
-                    throw new RuntimeException(e);
-                }
-            }
-        }
-        /**
-         * 这要从 Java 的 `byte` 类型和位运算的类型提升说起。
-         *
-         * ## 根源：Java 的 byte 是有符号的
-         *
-         * Java 没有无符号 byte，`byte` 的范围是 **-128 ~ 127**。MD5 产生的字节值在 0~255，落到 128~255 时 Java 就当负数了。
-         *
-         * ```
-         * MD5 字节:   0xbc  →  二进制 10111100
-         *
-         * Java byte 解读:
-         *   最高位是 1 → 负数 → 值是 -68
-         * ```
-         *
-         * ---
-         *
-         * ## 关键：`&` 操作会触发"二进制数字提升"
-         *
-         * Java 在做 `&`、`|`、`<<` 等位运算前，会先把 byte **自动提升为 int**（这叫 *binary numeric promotion*）。
-         *
-         * 提升规则：**符号扩展**——高位全部用原来的符号位填充。
-         *
-         * ```
-         * 原始 byte:    10111100  (-68, 一共8位)
-         * 提升为 int:   11111111 11111111 11111111 10111100  (还是 -68, 但现在是32位)
-         *               ^^^^^^^^ ^^^^^^^^ ^^^^^^^^
-         *               高位全被符号位 1 填满了
-         * ```
-         *
-         * ---
-         *
-         * ## `& 0xFF` 做了两件事
-         *
-         * `0xFF` 是 `int` 字面量：
-         *
-         * ```
-         * 0xFF  =  00000000 00000000 00000000 11111111  (255)
-         * ```
-         *
-         * 做 `&` 运算：
-         *
-         * ```
-         * 提升后的 -68:   11111111 11111111 11111111 10111100
-         * 0xFF:           00000000 00000000 00000000 11111111
-         *                 ─────────────────────────────────
-         * & 结果:          00000000 00000000 00000000 10111100  = 188
-         * ```
-         *
-         * 高 24 位全被清零了，只保留低 8 位的原始比特。结果就是 **188**，一个正 int。
-         *
-         * ---
-         *
-         * ## 直观总结
-         *
-         * ```
-         * byte 0xbc = -68
-         *               │
-         *               ▼  提升为 int（符号扩展，高位补1）
-         *     11111111 11111111 11111111 10111100
-         *               │
-         *               ▼  & 0xFF（高位清零，只留低8位）
-         *     00000000 00000000 00000000 10111100  = 188 ✅
-         * ```
-         *
-         * **一句话**：`& 0xFF` 就是把符号扩展产生的那些多余的 `1` 全部砍掉，只保留原始 8 位，这样就恢复成了 0~255 的无符号值。
-         */
     }
 }
-
