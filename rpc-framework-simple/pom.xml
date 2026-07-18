@@ -22,6 +22,20 @@
             <groupId>com.github.hgdcoder</groupId>
             <artifactId>rpc-framework-common</artifactId>
         </dependency>
+        <!-- V6：使用 Curator 5 的 CuratorCache 连接 ZooKeeper，并监听服务节点变化。 -->
+        <dependency>
+            <groupId>org.apache.curator</groupId>
+            <artifactId>curator-framework</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.curator</groupId>
+            <artifactId>curator-recipes</artifactId>
+        </dependency>
+        <!-- 显式声明客户端版本，使它与 Docker 中的 ZooKeeper 3.8.6 保持一致。 -->
+        <dependency>
+            <groupId>org.apache.zookeeper</groupId>
+            <artifactId>zookeeper</artifactId>
+        </dependency>
 
         <!-- test -->
         <dependency>

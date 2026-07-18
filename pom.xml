@@ -24,12 +24,15 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 
         <lombok.version>1.18.36</lombok.version>
-        <slf4j.version>1.7.36</slf4j.version>
-        <logback.version>1.2.11</logback.version>
+        <!-- 与 ZooKeeper 3.8.6 官方依赖保持一致，避免 SLF4J 和 Logback 混用旧版本。 -->
+        <slf4j.version>2.0.13</slf4j.version>
+        <logback.version>1.3.15</logback.version>
         <junit.jupiter.version>5.10.3</junit.jupiter.version>
         <mockito.version>5.12.0</mockito.version>
         <maven.compiler.plugin.version>3.13.0</maven.compiler.plugin.version>
         <maven.surefire.plugin.version>3.2.5</maven.surefire.plugin.version>
+        <curator.version>5.9.0</curator.version>
+        <zookeeper.version>3.8.6</zookeeper.version>
     </properties>
 
     <dependencyManagement>
@@ -65,6 +68,11 @@
                 <version>${logback.version}</version>
             </dependency>
             <dependency>
+                <groupId>ch.qos.logback</groupId>
+                <artifactId>logback-core</artifactId>
+                <version>${logback.version}</version>
+            </dependency>
+            <dependency>
                 <groupId>org.junit.jupiter</groupId>
                 <artifactId>junit-jupiter</artifactId>
                 <version>${junit.jupiter.version}</version>
@@ -73,6 +81,22 @@
                 <groupId>org.mockito</groupId>
                 <artifactId>mockito-core</artifactId>
                 <version>${mockito.version}</version>
+            </dependency>
+            <!-- V6：统一管理 Curator 和 ZooKeeper 客户端版本，保证与 Docker 服务端配套。 -->
+            <dependency>
+                <groupId>org.apache.curator</groupId>
+                <artifactId>curator-framework</artifactId>
+                <version>${curator.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.curator</groupId>
+                <artifactId>curator-recipes</artifactId>
+                <version>${curator.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.zookeeper</groupId>
+                <artifactId>zookeeper</artifactId>
+                <version>${zookeeper.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

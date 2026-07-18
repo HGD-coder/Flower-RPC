@@ -4,28 +4,29 @@ import com.github.hgdcoder.registry.ServiceDiscovery;
 import com.github.hgdcoder.remoting.dto.RpcRequest;
 import com.github.hgdcoder.transport.RpcRequestTransport;
 
-import java.io.Closeable;
-import java.io.ObjectInputStream;
-import java.io.ObjectOutputStream;
 import java.net.InetSocketAddress;
-import java.net.Socket;
 
+/**
+ * 基于阻塞 Socket 的 RPC 客户端。
+ *
+ * V7 的核心变化：
+ * 从“每个线程只有一条连接”改为“每个线程、每个服务地址一条连接”。
+ */
 public class SocketRpcClient implements RpcRequestTransport {
     private static final int DEFAULT_CONNECT_TIMEOUT_MILLIS = 3000;
     private static final int DEFAULT_READ_TIMEOUT_MILLIS = 5000;
 
     /**
-     * Finds the remote service address by rpcServiceName.
-     * V4 keeps only the discovery-based client flow.
+     * 根据 rpcServiceName 从 ZooKeeper 地址缓存中发现服务，
+     * 再通过负载均衡选择一个服务提供者地址。
      */
     private final ServiceDiscovery serviceDiscovery;
 
     /**
-     * One connection per caller thread.
-     * ObjectInputStream/ObjectOutputStream are not safe to share for concurrent
-     * request-response reads, so each benchmark worker keeps its own socket.
+     * 管理当前客户端的地址级连接缓存。
      */
-    private final ThreadLocal<SocketConnection> connectionHolder = new ThreadLocal<>();
+    private final SocketConnectionProvider connectionProvider =
+            new SocketConnectionProvider();
 
     /**
      * V4 usage:
@@ -52,131 +53,63 @@ public class SocketRpcClient implements RpcRequestTransport {
         try {
             return connection.send(rpcRequest);
         } catch (Exception e) {
-            // Drop the current thread's broken connection. The next request will
-            // create a fresh one.
-            closeCurrentConnection();
-            throw new RuntimeException("Send rpc request failed", e);
+            /*
+             * 当前地址调用失败，只删除该地址对应的连接。
+             *
+             * 例如 9999 失败时：
+             * 删除 Socket-9999
+             * 保留 Socket-9998
+             * 保留 Socket-10000
+             */
+            connectionProvider.remove(address);
+
+            throw new RuntimeException("Send rpc request failed:" + address, e);
         }
     }
 
     /**
-     * Reuses the current thread's connection when it still points to the same
-     * service address; otherwise creates a new socket connection.
+     * 优先复用当前线程已经建立的地址连接。
      */
     private SocketConnection getOrCreateConnection(InetSocketAddress address) {
-        SocketConnection connection = connectionHolder.get();
+        SocketConnection connection = connectionProvider.get(address);
 
-        if (connection == null || !connection.isAvailable() || !connection.isSameAddress(address)) {
-            closeCurrentConnection();
-            connection = new SocketConnection(
-                    address.getHostString(),
-                    address.getPort(),
-                    DEFAULT_CONNECT_TIMEOUT_MILLIS,
-                    DEFAULT_READ_TIMEOUT_MILLIS
-            );
-            connectionHolder.set(connection);
+        if(connection != null) {
+            return connection;
         }
 
+        connection = new SocketConnection(
+                address,
+                DEFAULT_CONNECT_TIMEOUT_MILLIS,
+                DEFAULT_READ_TIMEOUT_MILLIS
+        );
+
+        connectionProvider.set(address, connection);
         return connection;
     }
 
     /**
-     * Closes the connection owned by the current thread.
+     * 关闭当前调用线程持有的所有服务地址连接。
+     *
+     * 注意它只能关闭当前线程的 ThreadLocal 连接，
+     * 因此 Benchmark 工作线程必须各自在 finally 中调用。
      */
-    public void closeCurrentConnection() {
-        SocketConnection connection = connectionHolder.get();
+    public void closeCurrentThreadConnections() {
+        connectionProvider.closeCurrentThreadConnection();
+    }
 
-        if (connection != null) {
-            connection.close();
-            connectionHolder.remove();
-        }
+    public long getCreatedConnectionCount(){
+        return connectionProvider.getCreatedConnectionCount();
+    }
+
+    public long getReusedConnectionCount(){
+        return connectionProvider.getReusedConnectionCount();
     }
 
     /**
-     * A real socket connection that owns its input/output object streams.
+     * 清空预热阶段产生的连接统计
      */
-    private static class SocketConnection implements Closeable {
-        private final String host;
-        private final int port;
-        private final Socket socket;
-
-        private ObjectOutputStream out;
-        private ObjectInputStream in;
-
-        SocketConnection(String host, int port, int connectTimeoutMillis, int readTimeoutMillis) {
-            this.host = host;
-            this.port = port;
-
-            try {
-                socket = new Socket();
-                // Reduce latency for small request-response messages.
-                socket.setTcpNoDelay(true);
-                socket.connect(new InetSocketAddress(host, port), connectTimeoutMillis);
-                socket.setSoTimeout(readTimeoutMillis);
-
-                /*
-                 * ObjectOutputStream writes a stream header when it is created,
-                 * while ObjectInputStream waits for the peer's header. Creating
-                 * output first on both sides avoids a stream-header deadlock.
-                 */
-                out = new ObjectOutputStream(socket.getOutputStream());
-                out.flush();
-                in = new ObjectInputStream(socket.getInputStream());
-            } catch (Exception e) {
-                close();
-                throw new RuntimeException("Create socket connection failed", e);
-            }
-        }
-
-        /**
-         * Sends one RpcRequest and waits for the matching RpcResponse.
-         */
-        Object send(RpcRequest rpcRequest) throws Exception {
-            out.writeObject(rpcRequest);
-            out.flush();
-            // Clear the object handle table for long-lived streams.
-            out.reset();
-            return in.readObject();
-        }
-
-        /**
-         * Checks whether this socket can still be reused.
-         */
-        boolean isAvailable() {
-            return socket != null
-                    && socket.isConnected()
-                    && !socket.isClosed()
-                    && !socket.isInputShutdown()
-                    && !socket.isOutputShutdown();
-        }
-
-        /**
-         * A discovered service may move to another address, so the cached
-         * connection is reused only when the address still matches.
-         */
-        boolean isSameAddress(InetSocketAddress address) {
-            return host.equals(address.getHostString()) && port == address.getPort();
-        }
-
-        /**
-         * Closes connection resources quietly.
-         */
-        @Override
-        public void close() {
-            closeQuietly(in);
-            closeQuietly(out);
-            closeQuietly(socket);
-        }
-
-        private void closeQuietly(Closeable closeable) {
-            if (closeable == null) {
-                return;
-            }
-
-            try {
-                closeable.close();
-            } catch (Exception ignored) {
-            }
-        }
+    public void resetConnectionStatistics(){
+        connectionProvider.resetStatistics();
     }
+
 }

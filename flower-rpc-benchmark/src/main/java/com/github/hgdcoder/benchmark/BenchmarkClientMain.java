@@ -2,8 +2,10 @@ package com.github.hgdcoder.benchmark;
 
 import com.github.hgdcoder.Hello;
 import com.github.hgdcoder.HelloService;
+import com.github.hgdcoder.loadbalance.loadbalancer.ConsistentHashLoadBalance;
 import com.github.hgdcoder.proxy.RpcClientProxy;
-import com.github.hgdcoder.registry.file.FileServiceDiscovery;
+import com.github.hgdcoder.registry.zk.CuratorUtils;
+import com.github.hgdcoder.registry.zk.ZkServiceDiscovery;
 import com.github.hgdcoder.transport.socket.SocketRpcClient;
 
 import java.util.ArrayList;
@@ -24,7 +26,9 @@ public class BenchmarkClientMain {
         int durationSeconds = intArg(args, "--duration", 30);
         int warmupSeconds = intArg(args, "--warmup", 5);
 
-        SocketRpcClient client = new SocketRpcClient(new FileServiceDiscovery());
+        SocketRpcClient client = new SocketRpcClient(
+                new ZkServiceDiscovery(new ConsistentHashLoadBalance())
+        );
         RpcClientProxy proxy = new RpcClientProxy(client, "test", "1.0");
         HelloService helloService = proxy.getProxy(HelloService.class);
 
@@ -33,7 +37,12 @@ public class BenchmarkClientMain {
         while (System.nanoTime() < warmupEnd) {
             helloService.hello(new Hello("warmup", "benchmark"));
         }
-        client.closeCurrentConnection();
+        // 关闭预热线程建立的全部服务地址连接。
+        client.closeCurrentThreadConnections();
+
+        // 正式压测只统计工作线程创建和复用的连接。
+        client.resetConnectionStatistics();
+
 
         ExecutorService pool = Executors.newFixedThreadPool(threads);
         CountDownLatch startGate = new CountDownLatch(1);
@@ -69,7 +78,7 @@ public class BenchmarkClientMain {
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                 } finally {
-                    client.closeCurrentConnection();
+                    client.closeCurrentThreadConnections();
                     doneGate.countDown();
                 }
             });
@@ -99,6 +108,36 @@ public class BenchmarkClientMain {
         System.out.println("p95Ms=" + format(nsToMs(percentile(sorted, 95))));
         System.out.println("p99Ms=" + format(nsToMs(percentile(sorted, 99))));
         System.out.println("maxMs=" + format(nsToMs(sorted.isEmpty() ? 0 : sorted.get(sorted.size() - 1))));
+
+        long createdConnections =
+                client.getCreatedConnectionCount();
+
+        long reusedConnections =
+                client.getReusedConnectionCount();
+
+        long connectionLookups =
+                createdConnections + reusedConnections;
+
+        double connectionReuseRate =
+                connectionLookups == 0
+                        ? 0
+                        : reusedConnections * 100.0 / connectionLookups;
+
+        System.out.println(
+                "createdConnections=" + createdConnections
+        );
+        System.out.println(
+                "reusedConnections=" + reusedConnections
+        );
+        System.out.println(
+                "connectionReuseRate="
+                        + format(connectionReuseRate)
+                        + "%"
+        );
+
+        // 每个工作线程已经在 finally 中关闭自己的 Socket。
+        // 全部压测结果输出完成后，再关闭所有线程共享的 ZooKeeper 客户端。
+        CuratorUtils.closeZkClient();
     }
 
     private static int intArg(String[] args, String name, int defaultValue) {

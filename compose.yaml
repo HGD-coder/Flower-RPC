@@ -1,0 +1,18 @@
+services:
+  zookeeper:
+    # V6 使用 ZooKeeper 3.8 稳定线，支持 CuratorCache 依赖的持久 Watch。
+    image: zookeeper:3.8.6
+    container_name: flower-rpc-zookeeper
+    restart: unless-stopped
+    ports:
+      # Flower-RPC 在宿主机运行，通过 127.0.0.1:2181 连接容器。
+      - "2181:2181"
+    environment:
+      # 开放健康检查需要使用的四字命令。
+      ZOO_4LW_COMMANDS_WHITELIST: ruok,srvr,mntr
+    healthcheck:
+      test: ["CMD-SHELL", "zkServer.sh status | grep 'Mode: standalone'"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
