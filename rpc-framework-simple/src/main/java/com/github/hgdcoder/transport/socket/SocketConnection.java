@@ -1,30 +1,31 @@
 package com.github.hgdcoder.transport.socket;
 
+import com.github.hgdcoder.remoting.codec.RpcMessageCodec;
+import com.github.hgdcoder.remoting.constants.RpcConstants;
+import com.github.hgdcoder.remoting.dto.RpcMessage;
 import com.github.hgdcoder.remoting.dto.RpcRequest;
+import com.github.hgdcoder.remoting.dto.RpcResponse;
+import com.github.hgdcoder.serialize.jdk.JdkSerializer;
 
-import java.io.Closeable;
-import java.io.IOException;
-import java.io.ObjectInputStream;
-import java.io.ObjectOutputStream;
+import java.io.*;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * 表示一条真实的 Socket 长连接。
+ * 一条由当前线程独占的 Socket 长连接。
  *
- * 一个 SocketConnection 持有：
- * 1. Socket
- * 2. ObjectOutputStream
- * 3. ObjectInputStream
- *
- * 当前连接由一个调用线程独占，因此不需要给 send() 加锁。
- * 后续切换到 Netty 后，它会被 Netty 的 Channel 替代。
+ * V8 不再直接使用 ObjectInputStream/ObjectOutputStream 传对象，
+ * 而是通过 RpcMessageCodec 收发具有明确边界的二进制数据包。
  */
 public class SocketConnection implements Closeable {
-    private final Socket socket;
+    private static final AtomicInteger PROTOCOL_REQUEST_ID = new AtomicInteger();
 
-    private ObjectOutputStream outputStream;
-    private ObjectInputStream inputStream;
+    private final Socket socket;
+    private final RpcMessageCodec messageCodec = new RpcMessageCodec(new JdkSerializer());
+
+    private DataOutputStream outputStream;
+    private DataInputStream inputStream;
 
     SocketConnection(InetSocketAddress address,
                      int connectTimeoutMillis,
@@ -41,16 +42,8 @@ public class SocketConnection implements Closeable {
             // 防止服务端一直不返回结果，导致客户端线程永久阻塞。
             socket.setSoTimeout(readTimeoutMillis);
 
-            /*
-             * ObjectOutputStream 创建时会立即写入流头。
-             * ObjectInputStream 创建时会等待对端流头。
-             *
-             * 客户端和服务端都先创建 ObjectOutputStream，
-             * 可以避免双方同时等待对方流头而发生死锁。
-             */
-            outputStream = new ObjectOutputStream(socket.getOutputStream());
-            outputStream.flush();
-            inputStream = new ObjectInputStream(socket.getInputStream());
+            outputStream = new DataOutputStream(socket.getOutputStream());
+            inputStream = new DataInputStream(socket.getInputStream());
         }catch (Exception e){
             close();
             throw new RuntimeException("Create socket connection failed: " + address,e);
@@ -58,26 +51,36 @@ public class SocketConnection implements Closeable {
     }
 
     /**
-     * 在当前连接上发送一次 RPC 请求，并同步等待响应。
+     * 发送一个请求并同步等待同一协议 requestId 的响应。
      *
-     * 当前一个连接只属于一个线程，所以同一时间只有一个请求：
-     *
-     * write request
-     * -> read response
-     * -> write next request
+     * RpcRequest.requestId 是业务调用 UUID；这里的 int requestId 属于协议层，
+     * 将来改成 Netty 异步请求时，它可以用来匹配响应与 CompletableFuture。
      */
     Object send(RpcRequest rpcRequest)throws Exception{
-        outputStream.writeObject(rpcRequest);
-        outputStream.flush();
+        int requestId = PROTOCOL_REQUEST_ID.incrementAndGet();
+        RpcMessage requestMessage = RpcMessage.builder()
+                        .messageType(RpcConstants.REQUEST_TYPE)
+                        .codec(RpcConstants.JDK_CODEC)
+                        .compress(RpcConstants.NO_COMPRESS)
+                        .requestId(requestId)
+                        .data(rpcRequest)
+                        .build();
 
-        /*
-         * ObjectOutputStream 会缓存已经序列化过的对象引用。
-         * 长连接反复发送请求时需要清空引用表，避免内存持续增长，
-         * 也避免相同对象再次发送时只写入旧引用。
-         */
-        outputStream.reset();
+        messageCodec.encode(outputStream, requestMessage);
+        RpcMessage responseMessage = messageCodec.decode(inputStream);
 
-        return inputStream.readObject();
+        if (responseMessage.getMessageType() != RpcConstants.RESPONSE_TYPE) {
+            throw new IOException("Expected RPC response, but type was: "
+                    + responseMessage.getMessageType());
+        }
+        if (responseMessage.getRequestId() != requestId) {
+            throw new IOException("Protocol request id does not match: expected="
+                    + requestId + ", actual=" + responseMessage.getRequestId());
+        }
+        if (!(responseMessage.getData() instanceof RpcResponse)) {
+            throw new IOException("RPC response body type is invalid");
+        }
+        return responseMessage.getData();
     }
 
     /**
