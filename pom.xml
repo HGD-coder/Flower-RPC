@@ -33,10 +33,23 @@
         <maven.surefire.plugin.version>3.2.5</maven.surefire.plugin.version>
         <curator.version>5.9.0</curator.version>
         <zookeeper.version>3.8.6</zookeeper.version>
+        <netty.version>4.1.134.Final</netty.version>
     </properties>
 
     <dependencyManagement>
         <dependencies>
+            <!--
+            V10：Netty 的各个模块必须保持同一版本。
+            使用 BOM 还能覆盖 ZooKeeper 传递引入的旧版 netty-handler，
+            避免同一个进程中混用多个 Netty 小版本。
+            -->
+            <dependency>
+                <groupId>io.netty</groupId>
+                <artifactId>netty-bom</artifactId>
+                <version>${netty.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
             <dependency>
                 <groupId>com.github.hgdcoder</groupId>
                 <artifactId>rpc-framework-common</artifactId>

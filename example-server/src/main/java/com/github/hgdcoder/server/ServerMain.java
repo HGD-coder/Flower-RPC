@@ -2,8 +2,9 @@ package com.github.hgdcoder.server;
 
 import com.github.hgdcoder.config.RpcServiceConfig;
 import com.github.hgdcoder.provider.impl.DefaultServiceProvider;
+import com.github.hgdcoder.registry.zk.CuratorUtils;
 import com.github.hgdcoder.registry.zk.ZkServiceRegistry;
-import com.github.hgdcoder.transport.socket.SocketRpcServer;
+import com.github.hgdcoder.transport.netty.server.NettyRpcServer;
 
 import java.net.InetSocketAddress;
 
@@ -25,7 +26,15 @@ public class ServerMain {
 
         serviceProvider.publishService(rpcServiceConfig);
 
-        SocketRpcServer server = new SocketRpcServer(port, serviceProvider);
+        NettyRpcServer server = new NettyRpcServer(port, serviceProvider);
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            // JVM 退出时先停止 Netty，再关闭 Curator，使服务节点随会话及时下线。
+            try {
+                server.close();
+            } finally {
+                CuratorUtils.closeZkClient();
+            }
+        }, "flower-rpc-server-shutdown"));
         server.start();
     }
 }

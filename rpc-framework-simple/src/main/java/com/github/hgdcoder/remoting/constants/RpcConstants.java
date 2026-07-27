@@ -28,6 +28,12 @@ public final class RpcConstants {
     /** V8 暂时只支持 JDK 序列化。 */
     public static final byte JDK_CODEC = 1;
 
+    /** Kryo 序列化（V9 正式推荐）。 */
+    public static final byte KRYO_CODEC = 2;
+
+    /** V9 主链路默认使用 Kryo；切回 JDK 只需修改这一处。 */
+    public static final byte DEFAULT_CODEC = KRYO_CODEC;
+
     /** V8 暂时不压缩消息体。 */
     public static final byte NO_COMPRESS = 0;
 

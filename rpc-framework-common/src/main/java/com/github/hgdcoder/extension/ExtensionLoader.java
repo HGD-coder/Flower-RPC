@@ -115,7 +115,7 @@ public final class ExtensionLoader<T> {
                 classes=cachedClasses.getValue();
                 if(classes==null){
                     classes=new HashMap<>();
-                    //3.从文件夹中加载所有的拓展类
+                    // 3.加载 META-INF/extensions/ 目录下的配置
                     loadDiretory(classes);
                     cachedClasses.setValue(classes);
                 }
@@ -128,13 +128,15 @@ public final class ExtensionLoader<T> {
      * java的SPI机制
      * */
     private void loadDiretory(Map<String,Class<?>> extensionClasses){
-        //1.构建配置文件的路径
+        // 1. 构建配置文件路径：META-INF/extensions/ + 接口全限定名
+        //    例如：META-INF/extensions/com.github.hgdcoder.serialize.Serializer
         String fileName=ExtensionLoader.SERVICE_DIRECTORY+type.getName();
         try{
             Enumeration<URL> urls;
-            //2.Java的SPI，拓展类加载器，然后设置文件的URL
+            // 2. 用类加载器读取该路径下的所有资源文件
             ClassLoader classLoader=ExtensionLoader.class.getClassLoader();
             urls=classLoader.getResources(fileName);
+            // 3. 遍历所有找到的配置文件（可能有多个 jar 包都提供了实现）
             if(urls!=null){
                 while(urls.hasMoreElements()){
                     URL resourceUrl=urls.nextElement();
@@ -166,8 +168,9 @@ public final class ExtensionLoader<T> {
                         String name=line.substring(0,ei).trim();
                         String clazzName=line.substring(ei+1).trim();
                         if(name.length()>0&&clazzName.length()>0){
-                            //4.Java的SPI的具体实现
+                            // 4. 用类加载器加载实现类的 Class 对象
                             Class<?> clazz=classLoader.loadClass(clazzName);
+                            // 5. 存入 map：name → Class
                             extensionClasses.put(name,clazz);
                         }
                     }catch(ClassNotFoundException e){

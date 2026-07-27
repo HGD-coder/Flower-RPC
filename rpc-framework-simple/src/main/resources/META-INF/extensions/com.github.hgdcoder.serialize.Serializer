@@ -1,0 +1,5 @@
+# Flower-RPC 序列化器 SPI 配置
+# 格式：extensionName=完整实现类名
+
+jdk=com.github.hgdcoder.serialize.jdk.JdkSerializer
+kryo=com.github.hgdcoder.serialize.kryo.KryoSerializer

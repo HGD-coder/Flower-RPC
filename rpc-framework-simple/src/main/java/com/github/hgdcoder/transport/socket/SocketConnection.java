@@ -22,7 +22,7 @@ public class SocketConnection implements Closeable {
     private static final AtomicInteger PROTOCOL_REQUEST_ID = new AtomicInteger();
 
     private final Socket socket;
-    private final RpcMessageCodec messageCodec = new RpcMessageCodec(new JdkSerializer());
+    private final RpcMessageCodec messageCodec = new RpcMessageCodec();
 
     private DataOutputStream outputStream;
     private DataInputStream inputStream;

@@ -33,7 +33,7 @@ public class SocketRpcServer {
 
     private final int port;
     private final ServiceProvider serviceProvider;
-    private final RpcMessageCodec messageCodec = new RpcMessageCodec(new JdkSerializer());
+    private final RpcMessageCodec messageCodec = new RpcMessageCodec();
 
     private final ExecutorService threadPool = new ThreadPoolExecutor(
             8,
