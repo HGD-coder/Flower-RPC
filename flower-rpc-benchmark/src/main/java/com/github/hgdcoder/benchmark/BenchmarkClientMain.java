@@ -6,9 +6,11 @@ import com.github.hgdcoder.loadbalance.loadbalancer.ConsistentHashLoadBalance;
 import com.github.hgdcoder.proxy.RpcClientProxy;
 import com.github.hgdcoder.registry.zk.CuratorUtils;
 import com.github.hgdcoder.registry.zk.ZkServiceDiscovery;
+import com.github.hgdcoder.remoting.constants.RpcConstants;
 import com.github.hgdcoder.transport.netty.client.NettyRpcClient;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
@@ -25,6 +27,14 @@ public class BenchmarkClientMain {
         int threads = intArg(args, "--threads", 4);
         int durationSeconds = intArg(args, "--duration", 30);
         int warmupSeconds = intArg(args, "--warmup", 5);
+        int payloadBytes = intArg(args, "--payload-bytes", 9);
+        if (payloadBytes < 0) {
+            throw new IllegalArgumentException("payload bytes must not be negative");
+        }
+        String payload = repeatedAsciiPayload(payloadBytes);
+
+        System.out.println("compress=" + compressName(RpcConstants.DEFAULT_COMPRESS));
+        System.out.println("payloadBytes=" + payloadBytes);
 
         NettyRpcClient client = new NettyRpcClient(
                 new ZkServiceDiscovery(new ConsistentHashLoadBalance())
@@ -36,7 +46,7 @@ public class BenchmarkClientMain {
             System.out.println("Warmup " + warmupSeconds + "s...");
             long warmupEnd = System.nanoTime() + TimeUnit.SECONDS.toNanos(warmupSeconds);
             while (System.nanoTime() < warmupEnd) {
-                helloService.hello(new Hello("warmup", "benchmark"));
+                helloService.hello(new Hello("warmup", payload));
             }
             // 只关闭预热连接，保留 EventLoop 供正式压测重新建连和复用。
             client.closeConnections();
@@ -63,7 +73,7 @@ public class BenchmarkClientMain {
                                 long start = System.nanoTime();
                                 try {
                                     String result = helloService.hello(
-                                            new Hello("Flower", "Benchmark"));
+                                            new Hello("Flower", payload));
                                     long cost = System.nanoTime() - start;
 
                                     if (result != null) {
@@ -161,6 +171,26 @@ public class BenchmarkClientMain {
 
         int index = (int) Math.ceil(sorted.size() * p / 100.0) - 1;
         return sorted.get(Math.max(0, Math.min(index, sorted.size() - 1)));
+    }
+
+    /**
+     * 使用单字节 ASCII 字符构造指定大小的可压缩负载。
+     * 例如 --payload-bytes=65536 就会让请求和响应携带约 64 KiB 重复文本。
+     */
+    private static String repeatedAsciiPayload(int payloadBytes) {
+        char[] chars = new char[payloadBytes];
+        Arrays.fill(chars, 'F');
+        return new String(chars);
+    }
+
+    private static String compressName(byte compressType) {
+        if (compressType == RpcConstants.NO_COMPRESS) {
+            return "none";
+        }
+        if (compressType == RpcConstants.GZIP_COMPRESS) {
+            return "gzip";
+        }
+        return "unknown(" + compressType + ")";
     }
 
     private static double nsToMs(long ns) {

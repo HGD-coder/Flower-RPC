@@ -47,6 +47,11 @@
             <groupId>io.netty</groupId>
             <artifactId>netty-all</artifactId>
         </dependency>
+        <!-- V13：注解扫描和 Bean 生命周期桥接由 Spring Context 提供。 -->
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-context</artifactId>
+        </dependency>
 
         <!-- test -->
         <dependency>

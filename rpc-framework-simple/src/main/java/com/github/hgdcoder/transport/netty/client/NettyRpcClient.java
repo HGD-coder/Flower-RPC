@@ -9,11 +9,13 @@ import com.github.hgdcoder.remoting.dto.RpcMessage;
 import com.github.hgdcoder.remoting.dto.RpcRequest;
 import com.github.hgdcoder.remoting.dto.RpcResponse;
 import com.github.hgdcoder.transport.RpcRequestTransport;
+import com.github.hgdcoder.transport.netty.handler.NettyRpcHeartbeatHandler;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.*;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
+import io.netty.handler.timeout.IdleStateHandler;
 
 
 import java.net.InetSocketAddress;
@@ -84,10 +86,40 @@ public class NettyRpcClient implements RpcRequestTransport,AutoCloseable {
                 .handler(new ChannelInitializer<SocketChannel>(){
                     @Override
                     protected void initChannel(SocketChannel channel) {
+                        /*
+                         * IdleStateHandler 不处理 RPC 业务数据，只统计这条连接多久没有读写。
+                         *
+                         * readerIdleTime：
+                         * 15 秒没有收到服务端任何数据，触发 READER_IDLE。
+                         *
+                         * writerIdleTime：
+                         * 5 秒没有向服务端写任何数据，触发 WRITER_IDLE。
+                         *
+                         * 事件会继续沿 Pipeline 向后传播，最终由
+                         * NettyRpcClientHandler.userEventTriggered() 处理。
+                         */
+                        channel.pipeline().addLast(
+                                "clentIdleStateHandler",
+                                new IdleStateHandler(
+                                        RpcConstants.HEARTBEAT_TIMEOUT_SECONDS,
+                                        RpcConstants.HEARTBEAT_INTERVAL_SECONDS,
+                                        0,
+                                        TimeUnit.SECONDS
+                                )
+                        );
+
                         // 入站按 addLast 顺序传播；出站从尾到头传播，因此编码器会在写入网络前执行。
                         channel.pipeline().addLast(new NettyRpcFrameDecoder());
                         channel.pipeline().addLast(new NettyRpcMessageDecoder());
                         channel.pipeline().addLast(new NettyRpcMessageEncoder());
+                        /*
+                         * 心跳在 I/O EventLoop 中处理，并在业务响应处理器之前消费 PONG。
+                         * 普通 RpcResponse 会继续传播给后面的 NettyRpcClientHandler。
+                         */
+                        channel.pipeline().addLast(
+                                "rpcHeartbeatHandler",
+                                NettyRpcHeartbeatHandler.forClient()
+                        );
                         channel.pipeline().addLast(
                                 new NettyRpcClientHandler(unprocessedRequests)
                         );
@@ -131,7 +163,8 @@ public class NettyRpcClient implements RpcRequestTransport,AutoCloseable {
             RpcMessage requestMessage = RpcMessage.builder()
                     .messageType(RpcConstants.REQUEST_TYPE)
                     .codec(RpcConstants.DEFAULT_CODEC)
-                    .compress(RpcConstants.NO_COMPRESS)
+                    // V12 默认使用 GZIP；服务端会沿用该字段压缩响应。
+                    .compress(RpcConstants.DEFAULT_COMPRESS)
                     .requestId(requestId)
                     .data(rpcRequest)
                     .build();

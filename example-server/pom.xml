@@ -21,6 +21,10 @@
             <groupId>com.github.hgdcoder</groupId>
             <artifactId>rpc-framework-simple</artifactId>
         </dependency>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-context</artifactId>
+        </dependency>
     </dependencies>
 
 </project>

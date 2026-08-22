@@ -1,0 +1,4 @@
+# Flower-RPC 压缩算法 SPI 配置
+# 左边是 CompressResolver 使用的扩展名，右边是实现类全限定名。
+
+gzip=com.github.hgdcoder.compress.gzip.GzipCompress

@@ -2,7 +2,9 @@ package com.github.hgdcoder.server;
 
 import com.github.hgdcoder.Hello;
 import com.github.hgdcoder.HelloService;
+import com.github.hgdcoder.annotation.RpcService;
 
+@RpcService(group = "test",version="1.0")
 public class HelloServiceImpl implements HelloService{
     @Override
     public String hello(Hello hello) {

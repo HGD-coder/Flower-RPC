@@ -16,6 +16,7 @@ import io.netty.handler.codec.TooLongFrameException;
  * 再由 Netty 写入网络；入站方向的 NettyRpcMessageDecoder 与它相反。
  */
 public class NettyRpcMessageEncoder extends MessageToByteEncoder<RpcMessage> {
+    private static final byte[] EMPTY_BODY = new byte[0];
     /**
      * 校验消息并按“协议头 + 序列化消息体”的顺序写入出站缓冲区。
      *
@@ -27,8 +28,30 @@ public class NettyRpcMessageEncoder extends MessageToByteEncoder<RpcMessage> {
     @Override
     protected void encode(ChannelHandlerContext ctx, RpcMessage message, ByteBuf out){
         validate(message);
-        Serializer serializer = SerializerResolver.resolve(message.getCodec());
-        byte[] body = serializer.serialize(message.getData());
+
+        /*
+         * 心跳没有业务对象，不应该为了传输 "ping"/"pong" 再启动一次序列化。
+         * 普通消息才根据协议头中的 codec 查找 JDK/Kryo 序列化器。
+         */
+        byte[] body = EMPTY_BODY;
+        if(!isHeartbeat(message.getMessageType())){
+            Serializer serializer = SerializerResolver.resolve(message.getCodec());
+            byte[] serializedBody = serializer.serialize(message.getData());
+
+            /*
+             * 同时限制压缩前长度，避免客户端用一个很小的压缩包表达超大的对象。
+             * 该限制也和解压端的最大输出长度保持一致。
+             */
+            int maxBodyLength = RpcConstants.MAX_FRAME_LENGTH - RpcConstants.HEADER_LENGTH;
+            if(serializedBody.length > maxBodyLength){
+                throw new TooLongFrameException("RPC serialized body too large: " + serializedBody.length);
+            }
+            body = CompressResolver.compress(
+                    message.getCompress(),
+                    serializedBody
+            );
+        }
+
         if(body.length > RpcConstants.MAX_FRAME_LENGTH - RpcConstants.HEADER_LENGTH){
             throw new TooLongFrameException("RPC frame too large:"+ (RpcConstants.HEADER_LENGTH + (long) body.length));
         }
@@ -58,18 +81,57 @@ public class NettyRpcMessageEncoder extends MessageToByteEncoder<RpcMessage> {
             if (!(message.getData() instanceof RpcRequest)) {
                 throw new IllegalArgumentException("RPC request body type is invalid");
             }
+            validateBusinessMetadata(message);
         } else if (message.getMessageType() == RpcConstants.RESPONSE_TYPE) {
             if (!(message.getData() instanceof RpcResponse)) {
                 throw new IllegalArgumentException("RPC response body type is invalid");
             }
+            validateBusinessMetadata(message);
+        } else if (message.getMessageType() == RpcConstants.HEARTBEAT_REQUEST_TYPE) {
+            if (!RpcConstants.PING.equals(message.getData())) {
+                throw new IllegalArgumentException("Heartbeat request data must be ping");
+            }
+            validateHeartbeatMetadata(message);
+        } else if (message.getMessageType() == RpcConstants.HEARTBEAT_RESPONSE_TYPE) {
+            if (!RpcConstants.PONG.equals(message.getData())) {
+                throw new IllegalArgumentException("Heartbeat response data must be pong");
+            }
+            validateHeartbeatMetadata(message);
         } else {
             throw new IllegalArgumentException("Unsupported message type: "
                     + message.getMessageType());
         }
+    }
+
+    /**
+     * 普通业务消息必须明确选择一种可用序列化器。
+     * V12 才会引入压缩，所以当前仍只接受 NO_COMPRESS。
+     */
+    private void validateBusinessMetadata(RpcMessage message) {
         SerializerResolver.resolve(message.getCodec());
-        if (message.getCompress() != RpcConstants.NO_COMPRESS) {
-            throw new IllegalArgumentException("Unsupported compress type: "
-                    + message.getCompress());
+        // V12 同时允许 NO_COMPRESS 和 GZIP_COMPRESS。
+        // 未知编号仍然会在这里被拒绝。
+        CompressResolver.validate(message.getCompress());
+    }
+
+    /**
+     * 心跳帧必须使用保留元数据：无序列化、无压缩、请求号为 0。
+     * 这样可以保证心跳始终是固定 16 字节，也不会占用业务请求号。
+     */
+    private void validateHeartbeatMetadata(RpcMessage message) {
+        if (message.getCodec() != RpcConstants.NO_CODEC) {
+            throw new IllegalArgumentException("Heartbeat frame must use NO_CODEC");
         }
+        if (message.getCompress() != RpcConstants.NO_COMPRESS) {
+            throw new IllegalArgumentException("Heartbeat frame must use NO_COMPRESS");
+        }
+        if (message.getRequestId() != RpcConstants.HEARTBEAT_REQUEST_ID) {
+            throw new IllegalArgumentException("Heartbeat requestId must be 0");
+        }
+    }
+
+    private boolean isHeartbeat(byte messageType) {
+        return messageType == RpcConstants.HEARTBEAT_REQUEST_TYPE
+                || messageType == RpcConstants.HEARTBEAT_RESPONSE_TYPE;
     }
 }

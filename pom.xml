@@ -34,6 +34,7 @@
         <curator.version>5.9.0</curator.version>
         <zookeeper.version>3.8.6</zookeeper.version>
         <netty.version>4.1.134.Final</netty.version>
+        <spring.version>5.3.39</spring.version>
     </properties>
 
     <dependencyManagement>
@@ -110,6 +111,12 @@
                 <groupId>org.apache.zookeeper</groupId>
                 <artifactId>zookeeper</artifactId>
                 <version>${zookeeper.version}</version>
+            </dependency>
+            <!-- V13：Spring 接入统一停留在兼容 JDK 8 的 5.3.x 版本。 -->
+            <dependency>
+                <groupId>org.springframework</groupId>
+                <artifactId>spring-context</artifactId>
+                <version>${spring.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

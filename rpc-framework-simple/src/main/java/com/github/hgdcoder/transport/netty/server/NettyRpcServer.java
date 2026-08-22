@@ -4,7 +4,9 @@ import com.github.hgdcoder.provider.ServiceProvider;
 import com.github.hgdcoder.remoting.codec.NettyRpcFrameDecoder;
 import com.github.hgdcoder.remoting.codec.NettyRpcMessageDecoder;
 import com.github.hgdcoder.remoting.codec.NettyRpcMessageEncoder;
+import com.github.hgdcoder.remoting.constants.RpcConstants;
 import com.github.hgdcoder.remoting.handler.RpcRequestHandler;
+import com.github.hgdcoder.transport.netty.handler.NettyRpcHeartbeatHandler;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelInitializer;
@@ -13,6 +15,7 @@ import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
+import io.netty.handler.timeout.IdleStateHandler;
 import io.netty.util.concurrent.DefaultEventExecutorGroup;
 
 import java.net.InetSocketAddress;
@@ -74,6 +77,12 @@ public final class NettyRpcServer implements AutoCloseable {
         NettyRpcServerHandler serverHandler = new NettyRpcServerHandler(
                 new RpcRequestHandler(serviceProvider)
         );
+        /*
+         * 心跳处理器不保存连接级状态，可以被全部 SocketChannel 共享。
+         * 它留在 worker I/O 线程执行，不进入可能被慢业务占满的 businessGroup。
+         */
+        NettyRpcHeartbeatHandler heartbeatHandler =
+                NettyRpcHeartbeatHandler.forServer();
         ServerBootstrap bootstrap = new ServerBootstrap()
                 .group(bossGroup, workerGroup)
                 .channel(NioServerSocketChannel.class)
@@ -82,10 +91,27 @@ public final class NettyRpcServer implements AutoCloseable {
                 .childHandler(new ChannelInitializer<SocketChannel>() {
                     @Override
                     protected void initChannel(SocketChannel channel) {
+                        /*
+                         * 服务端只关心读空闲：15 秒没有收到业务请求或 PING，
+                         * 就产生 READER_IDLE，交给后面的心跳 Handler 关闭连接。
+                         */
+                        channel.pipeline().addLast(
+                                "serverIdleStateHandler",
+                                new IdleStateHandler(
+                                        RpcConstants.HEARTBEAT_TIMEOUT_SECONDS,
+                                        0,
+                                        0,
+                                        TimeUnit.SECONDS
+                                )
+                        );
                         // 入站依次切帧、反序列化并进入业务线程；出站响应反向经过编码器。
                         channel.pipeline().addLast(new NettyRpcFrameDecoder());
                         channel.pipeline().addLast(new NettyRpcMessageDecoder());
                         channel.pipeline().addLast(new NettyRpcMessageEncoder());
+                        channel.pipeline().addLast(
+                                "rpcHeartbeatHandler",
+                                heartbeatHandler
+                        );
                         channel.pipeline().addLast(
                                 businessGroup,
                                 "rpcServerHandler",
