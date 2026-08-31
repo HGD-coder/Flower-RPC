@@ -1,8 +1,10 @@
 package com.github.hgdcoder.transport.netty.client;
 
+import com.github.hgdcoder.config.RpcFrameworkConfig;
 import com.github.hgdcoder.config.RpcServiceConfig;
 import com.github.hgdcoder.provider.impl.DefaultServiceProvider;
 import com.github.hgdcoder.registry.ServiceDiscovery;
+import com.github.hgdcoder.remoting.constants.RpcConstants;
 import com.github.hgdcoder.remoting.dto.RpcRequest;
 import com.github.hgdcoder.remoting.dto.RpcResponse;
 import com.github.hgdcoder.transport.netty.server.NettyRpcServer;
@@ -28,6 +30,39 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 这里使用真实本地端口而非 EmbeddedChannel，以验证多线程共用连接、超时清理和关闭顺序的整体协作。
  */
 class NettyRpcLocalEndToEndTest {
+    @Test
+    void shouldRoundTripWithJdkSerializerAndGzipConfig() {
+        RpcFrameworkConfig config = RpcFrameworkConfig.defaults().toBuilder()
+                .serverPort(0)
+                .serializer("jdk")
+                .compress("gzip")
+                .build();
+
+        DefaultServiceProvider provider = new DefaultServiceProvider();
+        provider.addService(RpcServiceConfig.builder()
+                .service(new EchoServiceImpl())
+                .group("test")
+                .version("1.0")
+                .build());
+
+        NettyRpcServer server = new NettyRpcServer(config, provider);
+        server.start();
+        ServiceDiscovery discovery = request -> new InetSocketAddress(
+                config.getServerHost(),
+                server.getPort()
+        );
+        NettyRpcClient client = new NettyRpcClient(discovery, config);
+        try {
+            // 配置名称最终映射成协议头中的 byte，并完成一次真实 Socket 往返。
+            assertEquals(RpcConstants.JDK_CODEC, config.getCodec());
+            assertEquals(RpcConstants.GZIP_COMPRESS, config.getCompressType());
+            assertEquals("echo:configured", call(client, "configured", 0));
+        } finally {
+            client.close();
+            server.close();
+        }
+    }
+
     @Test
     void shouldCallLocallyAndShareOneChannelAcrossThreads() throws Exception {
         // 同时放行多个调用，验证连接占位 Future 让它们共用同一条物理连接。

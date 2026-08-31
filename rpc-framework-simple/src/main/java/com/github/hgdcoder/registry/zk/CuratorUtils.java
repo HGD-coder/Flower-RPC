@@ -1,5 +1,6 @@
 package com.github.hgdcoder.registry.zk;
 
+import com.github.hgdcoder.config.RpcFrameworkConfig;
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.CuratorFrameworkFactory;
 import org.apache.curator.framework.imps.CuratorFrameworkState;
@@ -27,8 +28,6 @@ import java.util.concurrent.TimeUnit;
 public final class CuratorUtils {
     public static final String ZK_REGISTER_ROOT_PATH = "/flower-rpc";
 
-    private static final String DEFAULT_ZK_ADDRESS = "127.0.0.1:2181";
-    private static final String ZK_ADDRESS_PROPERTY = "flower.rpc.zk.address";
     private static final int BASE_SLEEP_TIME_MILLIS = 1000;
     private static final int MAX_RETRIES = 3;
     private static final int CONNECTION_TIMEOUT_SECONDS = 10;
@@ -121,6 +120,7 @@ public final class CuratorUtils {
             new ConcurrentHashMap<>();
 
     private static volatile CuratorFramework zkClient;
+    private static volatile String activeZkAddress;
     private static volatile boolean shutdownHookRegistered;
 
     private CuratorUtils() {
@@ -130,14 +130,26 @@ public final class CuratorUtils {
      * 获取当前 JVM 共享的 Curator 客户端。
      *
      * 使用单例客户端是因为建立 ZooKeeper 会话的成本较高，没有必要每次注册或查询都创建连接。
-     * 默认连接 compose.yaml 映射到宿主机的 127.0.0.1:2181。
-     * 也可以使用 -Dflower.rpc.zk.address=host:port 覆盖默认地址。
+     * 兼容旧调用方式，但地址仍由统一配置加载器在本次调用开始时确定。
      */
     public static CuratorFramework getZkClient() {
+        return getZkClient(RpcFrameworkConfig.load().getZkAddress());
+    }
+
+    /**
+     * 获取指定 connect string 对应的 JVM 共享 Curator 客户端。
+     *
+     * <p>监听器、服务地址和注册节点缓存均为静态状态，不能同时服务两个 ZooKeeper
+     * 集群。因此已有活跃客户端时传入不同地址会立即失败；调用 closeZkClient()
+     * 清理全部关联状态后可以安全切换。</p>
+     */
+    public static CuratorFramework getZkClient(String zkAddress) {
+        String normalizedAddress = normalizeZkAddress(zkAddress);
         CuratorFramework currentClient = zkClient;
 
         // 第一次检查不加锁，客户端已经启动时可以直接返回。
         if (currentClient != null && currentClient.getState() == CuratorFrameworkState.STARTED) {
+            ensureSameActiveAddress(normalizedAddress);
             return currentClient;
         }
 
@@ -145,12 +157,17 @@ public final class CuratorUtils {
             // 获取锁之后再次检查，防止多个线程同时创建 Curator 客户端。
             currentClient = zkClient;
             if (currentClient != null && currentClient.getState() == CuratorFrameworkState.STARTED) {
+                ensureSameActiveAddress(normalizedAddress);
                 return currentClient;
             }
 
-            String zkAddress = System.getProperty(ZK_ADDRESS_PROPERTY, DEFAULT_ZK_ADDRESS);
+            // 客户端若被外部提前关闭，对应 watcher 和地址缓存也必须一起清理后重建。
+            if (currentClient != null) {
+                closeZkClient();
+            }
+
             CuratorFramework newClient = CuratorFrameworkFactory.builder()
-                    .connectString(zkAddress)
+                    .connectString(normalizedAddress)
                     // 连接失败时最多重试 3 次，并逐渐增加每次重试前的等待时间。
                     .retryPolicy(new ExponentialBackoffRetry(BASE_SLEEP_TIME_MILLIS, MAX_RETRIES))
                     .build();
@@ -171,6 +188,8 @@ public final class CuratorUtils {
                 throw new RuntimeException("Interrupted while connecting to ZooKeeper", e);
             }
 
+            // 先发布地址再发布 volatile 客户端，快速读取路径看到客户端时一定能看到配套地址。
+            activeZkAddress = normalizedAddress;
             zkClient = newClient;
             registerShutdownHook();
             return newClient;
@@ -270,6 +289,7 @@ public final class CuratorUtils {
         if (zkClient != null) {
             zkClient.close();
             zkClient = null;
+            activeZkAddress = null;
         }
     }
 
@@ -368,6 +388,27 @@ public final class CuratorUtils {
     private static String buildServicePath(String rpcServiceName) {
         return ZK_REGISTER_ROOT_PATH + "/" + rpcServiceName;
     }
+
+    private static String normalizeZkAddress(String zkAddress) {
+        if (zkAddress == null || zkAddress.trim().isEmpty()) {
+            throw new IllegalArgumentException("zkAddress must not be empty");
+        }
+        return zkAddress.trim();
+    }
+
+    private static void ensureSameActiveAddress(String requestedAddress) {
+        String currentAddress = activeZkAddress;
+        if (!requestedAddress.equals(currentAddress)) {
+            throw new IllegalStateException(
+                    "ZooKeeper client already uses connect string '"
+                            + currentAddress
+                            + "'; requested '"
+                            + requestedAddress
+                            + "'. Call closeZkClient() before switching addresses."
+            );
+        }
+    }
+
 
     private static void registerShutdownHook() {
         if (shutdownHookRegistered) {

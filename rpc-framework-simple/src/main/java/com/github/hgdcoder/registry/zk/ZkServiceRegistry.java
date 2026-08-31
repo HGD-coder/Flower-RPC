@@ -1,9 +1,11 @@
 package com.github.hgdcoder.registry.zk;
 
+import com.github.hgdcoder.config.RpcFrameworkConfig;
 import com.github.hgdcoder.registry.ServiceRegistry;
 import org.apache.curator.framework.CuratorFramework;
 
 import java.net.InetSocketAddress;
+
 
 /**
  * 基于 ZooKeeper 的服务注册实现。
@@ -11,6 +13,25 @@ import java.net.InetSocketAddress;
  * 服务端发布服务时，会把“完整服务名 + 服务地址”写入 ZooKeeper。
  */
 public class ZkServiceRegistry implements ServiceRegistry {
+    private final String zkAddress;
+
+    public ZkServiceRegistry() {
+        this(RpcFrameworkConfig.load());
+    }
+
+    public ZkServiceRegistry(RpcFrameworkConfig config) {
+        this(requireConfig(config).getZkAddress());
+    }
+
+    public ZkServiceRegistry(String zkAddress) {
+        if (zkAddress == null || zkAddress.trim().isEmpty()) {
+            throw new IllegalArgumentException(
+                    "zkAddress must not be empty"
+            );
+        }
+        this.zkAddress = zkAddress.trim();
+    }
+
     @Override
     public void registerService(
             String rpcServiceName,
@@ -31,5 +52,12 @@ public class ZkServiceRegistry implements ServiceRegistry {
         // 复用当前 JVM 的 Curator 客户端，并注册临时服务节点。
         CuratorFramework zkClient = CuratorUtils.getZkClient();
         CuratorUtils.createEphemeralNode(zkClient, servicePath);
+    }
+
+    private static RpcFrameworkConfig requireConfig(RpcFrameworkConfig config) {
+        if (config == null) {
+            throw new IllegalArgumentException("config must not be null");
+        }
+        return config;
     }
 }

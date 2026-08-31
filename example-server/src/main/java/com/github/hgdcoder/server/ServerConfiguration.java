@@ -1,6 +1,7 @@
 package com.github.hgdcoder.server;
 
 import com.github.hgdcoder.annotation.RpcScan;
+import com.github.hgdcoder.config.RpcFrameworkConfig;
 import com.github.hgdcoder.provider.impl.DefaultServiceProvider;
 import com.github.hgdcoder.registry.zk.ZkServiceRegistry;
 import com.github.hgdcoder.transport.netty.server.NettyRpcServer;
@@ -17,26 +18,35 @@ import java.net.InetSocketAddress;
 @RpcScan(basePackage="com.github.hgdcoder.server")
 public class ServerConfiguration {
     @Bean
-    public ZkServiceRegistry zkServiceRegistry() {
-        return new ZkServiceRegistry();
+    public RpcFrameworkConfig rpcFrameworkConfig() {
+        // 注册地址、监听地址与心跳参数必须来自同一次加载，避免组件之间观察到不同值。
+        return RpcFrameworkConfig.load();
+    }
+
+    @Bean
+    public ZkServiceRegistry zkServiceRegistry(RpcFrameworkConfig config) {
+        return new ZkServiceRegistry(config);
     }
 
     @Bean
     public DefaultServiceProvider serviceProvider(
             ZkServiceRegistry serviceRegistry,
-            @Value("${flower.rpc.server.port:9998}") int port) {
+            RpcFrameworkConfig config) {
             return new DefaultServiceProvider(
                     serviceRegistry,
-                    new InetSocketAddress("127.0.0.1",port)
+                    new InetSocketAddress(
+                            config.getServerHost(),
+                            config.getServerPort()
+                    )
             );
     }
 
     @Bean(destroyMethod = "close")
     public NettyRpcServer nettyRpcServer(
             DefaultServiceProvider serviceProvider,
-            @Value("${flower.rpc.server.port:9998}") int port
+            RpcFrameworkConfig config
     ){
         // Spring 关闭上下文时调用 close，统一回收监听 Channel 和三组 Netty 线程。
-        return new NettyRpcServer(port, serviceProvider);
+        return new NettyRpcServer(config, serviceProvider);
     }
 }

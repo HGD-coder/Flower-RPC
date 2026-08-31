@@ -1,5 +1,6 @@
 package com.github.hgdcoder.transport.netty.server;
 
+import com.github.hgdcoder.config.RpcFrameworkConfig;
 import com.github.hgdcoder.provider.ServiceProvider;
 import com.github.hgdcoder.remoting.codec.NettyRpcFrameDecoder;
 import com.github.hgdcoder.remoting.codec.NettyRpcMessageDecoder;
@@ -32,31 +33,70 @@ public final class NettyRpcServer implements AutoCloseable {
 
     // 构造时指定的监听端口；0表示由操作系统选择空闲端口
     private final int port;
+
+    private final int heartbeatTimeoutSeconds;
+
     // 服务查找和调用的来源，在服务端整个生命周期内保持不变
     private final ServiceProvider serviceProvider;
+
     // 只接收新连接的线程组，服务关闭时最后释放。
-    private final EventLoopGroup bossGroup = new NioEventLoopGroup(1);
+    private final EventLoopGroup bossGroup;
+
     // 处理已建立连接的读写事件的 I/O 线程组。
-    private final EventLoopGroup workerGroup = new NioEventLoopGroup();
+    private final EventLoopGroup workerGroup;
+
     // 专门执行可能阻塞的业务调用，避免占用 workerGroup 的 I/O 线程。
-    private final DefaultEventExecutorGroup businessGroup =
-            new DefaultEventExecutorGroup(
-                    Math.max(2,Runtime.getRuntime().availableProcessors())
-            );
+    private final DefaultEventExecutorGroup businessGroup;
+
     // 控制 start/close 的一次性生命周期；关闭后不允许重新绑定。
     private final AtomicBoolean closed = new AtomicBoolean();
+
     // 绑定成功后可见的监听 Channel，volatile 让 getPort 可读取实际分配的端口。
     private volatile Channel serverChannel;
 
-    public NettyRpcServer(int port,ServiceProvider serviceProvider) {
-        if(port < 0 || port > 65535) {
-            throw new IllegalArgumentException("port is out of range [0,65535]: " + port);
+    public NettyRpcServer(
+            RpcFrameworkConfig config,
+            ServiceProvider serviceProvider
+    ) {
+        if (config == null) {
+            throw new IllegalArgumentException(
+                    "config must not be null"
+            );
         }
-        if(serviceProvider == null) {
-            throw new IllegalArgumentException("serviceProvider must not be null");
+        if (serviceProvider == null) {
+            throw new IllegalArgumentException(
+                    "serviceProvider must not be null"
+            );
         }
-        this.port = port;
+
+        this.port = config.getServerPort();
+        this.heartbeatTimeoutSeconds =
+                config.getHeartbeatTimeoutSeconds();
         this.serviceProvider = serviceProvider;
+
+        // 参数校验通过后才创建重量级线程资源。
+        this.bossGroup = new NioEventLoopGroup(1);
+        this.workerGroup = new NioEventLoopGroup();
+        this.businessGroup =
+                new DefaultEventExecutorGroup(
+                        Math.max(
+                                2,
+                                Runtime.getRuntime().availableProcessors()
+                        )
+                );
+    }
+
+    public NettyRpcServer(
+            int port,
+            ServiceProvider serviceProvider
+    ) {
+        this(
+                RpcFrameworkConfig.load()
+                        .toBuilder()
+                        .serverPort(port)
+                        .build(),
+                serviceProvider
+        );
     }
 
     /**
@@ -98,7 +138,7 @@ public final class NettyRpcServer implements AutoCloseable {
                         channel.pipeline().addLast(
                                 "serverIdleStateHandler",
                                 new IdleStateHandler(
-                                        RpcConstants.HEARTBEAT_TIMEOUT_SECONDS,
+                                        heartbeatTimeoutSeconds,
                                         0,
                                         0,
                                         TimeUnit.SECONDS

@@ -43,7 +43,7 @@ public final class RpcConstants {
     /** Kryo 序列化（V9 正式推荐）。 */
     public static final byte KRYO_CODEC = 2;
 
-    /** V9 主链路默认使用 Kryo；切回 JDK 只需修改这一处。 */
+    /** 兼容旧代码；V14 运行时由 RpcFrameworkConfig 选择 codec。 */
     public static final byte DEFAULT_CODEC = KRYO_CODEC;
 
     /** V8 暂时不压缩消息体。 */
@@ -74,12 +74,15 @@ public final class RpcConstants {
     /**
      * 客户端连续 5 秒没有写任何数据时发送一次 PING。
      * 正常业务请求本身也算一次写操作，因此繁忙连接不会额外发送无意义心跳。
+     * 兼容旧代码；V14 客户端读取配置快照。
      */
     public static final int HEARTBEAT_INTERVAL_SECONDS = 5;
 
     /**
      * 连续 15 秒没有读到对端任何数据，就认为连接已经不可用。
      * 15 秒等于允许错过 3 个心跳周期，可以容忍短暂的 GC 或线程调度抖动。
+     *
+     *  兼容旧代码；V14 客户端和服务端读取配置快照。
      */
     public static final int HEARTBEAT_TIMEOUT_SECONDS = 15;
 

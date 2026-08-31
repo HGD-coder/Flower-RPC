@@ -1,5 +1,6 @@
 package com.github.hgdcoder.transport.netty.client;
 
+import com.github.hgdcoder.config.RpcFrameworkConfig;
 import com.github.hgdcoder.registry.ServiceDiscovery;
 import com.github.hgdcoder.remoting.codec.NettyRpcFrameDecoder;
 import com.github.hgdcoder.remoting.codec.NettyRpcMessageDecoder;
@@ -32,77 +33,88 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  * 响应则经入站解码和客户端处理器完成 Future，最后由本类等待并返回结果。
  */
 public class NettyRpcClient implements RpcRequestTransport,AutoCloseable {
-    private static final int DEFAULT_CONNECT_TIMEOUT_MILLIS = 3000;
-    private static final int DEFAULT_REQUEST_TIMEOUT_MILLIS = 5000;
 
     // 调用时查询目标地址；具体注册中心实现不属于 Netty 客户端的生命周期。
     private final ServiceDiscovery serviceDiscovery;
+
+    // 普通业务帧使用的协议 byte，配置字符串不会进入网络。
+    private final byte codec;
+    private final byte compress;
+
+    // 建连、请求等待和心跳参数都属于本客户端的启动快照，运行中不再读取外部配置。
+    private final int connectTimeoutMillis;
+
     // 每个 pending 请求的等待上限，超时任务由对应 Channel 的 EventLoop 执行
     private final int requestTimeoutMillis;
+
+    private final int heartbeatIntervalSeconds;
+    private final int heartbeatTimeoutSeconds;
+
     // 客户端 I/O 线程组，close 后不可重启，因此整个 NettyRpcClient 也不可重用。
     private final EventLoopGroup eventLoopGroup;
+
     // 跨连接共享的请求号到 Future 映射，负责唤醒同步等待的业务调用线程。
     private final UnprocessedRequests unprocessedRequests = new UnprocessedRequests();
+
     // 连接缓存和并发建连占位逻辑由此封装。
     private final NettyChannelProvider channelProvider;
+
     // 仅生成协议层 int 请求号；重复检测仍由 pending 表承担，避免回绕时覆盖未完成调用。
     private final AtomicInteger requestIdGenerator = new AtomicInteger();
+
     // 一旦置为 true，拒绝新调用，并在关闭顺序中防止重复释放资源。
     private final AtomicBoolean closed = new AtomicBoolean();
+
     // 读锁保护一次请求从取连接到登记和写出的关键段；写锁让关闭等待该段结束。
     private final ReentrantReadWriteLock lifecycleLock = new ReentrantReadWriteLock();
 
     public NettyRpcClient(ServiceDiscovery serviceDiscovery){
-        this(serviceDiscovery,
-                DEFAULT_CONNECT_TIMEOUT_MILLIS,
-                DEFAULT_REQUEST_TIMEOUT_MILLIS);
+        this(serviceDiscovery, RpcFrameworkConfig.load());
     }
 
-    /**
+    /** 使用调用方在启动阶段创建的同一份配置快照。
      * 创建客户端并配置真实连接使用的 Pipeline。
      * 入站按“切帧 -> 解码 -> 完成 pending”执行，出站时 Netty 会反向经过消息编码器。
      * 此构造器在包内可见，供本地端到端测试缩短连接和请求超时。
      */
-    NettyRpcClient(ServiceDiscovery serviceDiscovery,
-                   int connectTimeoutMills,
-                   int requestTimeoutMills) {
+    public NettyRpcClient(
+            ServiceDiscovery serviceDiscovery,
+            RpcFrameworkConfig config
+    ) {
         if(serviceDiscovery == null){
             throw new IllegalArgumentException("serviceDiscovery must not be null");
         }
-        if(connectTimeoutMills <=0 || requestTimeoutMills <=0){
-            throw new IllegalArgumentException("timeouts must be positive");
+        if(config == null){
+            throw new IllegalArgumentException("config must not be null");
         }
 
         this.serviceDiscovery = serviceDiscovery;
-        this.requestTimeoutMillis = requestTimeoutMills;
-        //NioEventLoopGroup 是需要显式关闭的重量级资源，所以先验证构造参数，再创建更合适。
+        this.codec = config.getCodec();
+        this.compress = config.getCompressType();
+        this.connectTimeoutMillis = config.getConnectTimeoutMillis();
+        this.requestTimeoutMillis = config.getRequestTimeoutMillis();
+        this.heartbeatIntervalSeconds = config.getHeartbeatIntervalSeconds();
+        this.heartbeatTimeoutSeconds = config.getHeartbeatTimeoutSeconds();
+        // NioEventLoopGroup 是需要显式关闭的重量级资源，所以先验证构造参数，再创建更合适。
         this.eventLoopGroup = new NioEventLoopGroup();
 
         Bootstrap bootstrap = new Bootstrap()
                 .group(eventLoopGroup)
                 .channel(NioSocketChannel.class)
-                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS,connectTimeoutMills)
+                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS,connectTimeoutMillis)
                 .option(ChannelOption.TCP_NODELAY,true)
                 .handler(new ChannelInitializer<SocketChannel>(){
                     @Override
                     protected void initChannel(SocketChannel channel) {
                         /*
-                         * IdleStateHandler 不处理 RPC 业务数据，只统计这条连接多久没有读写。
-                         *
-                         * readerIdleTime：
-                         * 15 秒没有收到服务端任何数据，触发 READER_IDLE。
-                         *
-                         * writerIdleTime：
-                         * 5 秒没有向服务端写任何数据，触发 WRITER_IDLE。
-                         *
-                         * 事件会继续沿 Pipeline 向后传播，最终由
-                         * NettyRpcClientHandler.userEventTriggered() 处理。
+                         * IdleStateHandler 只统计连接空闲时间，具体秒数来自当前客户端的不可变快照。
+                         * 事件继续沿 Pipeline 传播，由心跳 Handler 发送 PING 或关闭失效连接。
                          */
                         channel.pipeline().addLast(
                                 "clentIdleStateHandler",
                                 new IdleStateHandler(
-                                        RpcConstants.HEARTBEAT_TIMEOUT_SECONDS,
-                                        RpcConstants.HEARTBEAT_INTERVAL_SECONDS,
+                                        heartbeatTimeoutSeconds,
+                                        heartbeatIntervalSeconds,
                                         0,
                                         TimeUnit.SECONDS
                                 )
@@ -125,7 +137,20 @@ public class NettyRpcClient implements RpcRequestTransport,AutoCloseable {
                         );
                     }
                 });
-        this.channelProvider = new NettyChannelProvider(bootstrap,connectTimeoutMills);
+        this.channelProvider = new NettyChannelProvider(bootstrap,connectTimeoutMillis);
+    }
+
+
+    NettyRpcClient(ServiceDiscovery serviceDiscovery,
+                   int connectTimeoutMills,
+                   int requestTimeoutMills) {
+        this(
+                serviceDiscovery,
+                RpcFrameworkConfig.defaults().toBuilder()
+                        .connectTimeoutMillis(connectTimeoutMills)
+                        .requestTimeoutMillis(requestTimeoutMills)
+                        .build()
+        );
     }
 
 
@@ -162,9 +187,8 @@ public class NettyRpcClient implements RpcRequestTransport,AutoCloseable {
 
             RpcMessage requestMessage = RpcMessage.builder()
                     .messageType(RpcConstants.REQUEST_TYPE)
-                    .codec(RpcConstants.DEFAULT_CODEC)
-                    // V12 默认使用 GZIP；服务端会沿用该字段压缩响应。
-                    .compress(RpcConstants.DEFAULT_COMPRESS)
+                    .codec(codec)
+                    .compress(compress)
                     .requestId(requestId)
                     .data(rpcRequest)
                     .build();
@@ -181,6 +205,7 @@ public class NettyRpcClient implements RpcRequestTransport,AutoCloseable {
         }
 
         try{
+            //阻塞等待
             return responseFuture.get();
         }catch(InterruptedException e){
             unprocessedRequests.fail(requestId,e);

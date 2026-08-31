@@ -1,6 +1,8 @@
 package com.github.hgdcoder.registry.file;
 
+import com.github.hgdcoder.config.RpcFrameworkConfig;
 import com.github.hgdcoder.loadbalance.LoadBalance;
+import com.github.hgdcoder.loadbalance.LoadBalanceFactory;
 import com.github.hgdcoder.loadbalance.loadbalancer.RandomLoadBalance;
 import com.github.hgdcoder.registry.ServiceDiscovery;
 import com.github.hgdcoder.remoting.dto.RpcRequest;
@@ -18,10 +20,18 @@ public class FileServiceDiscovery implements ServiceDiscovery {
     private final LoadBalance loadBalance;
 
     public FileServiceDiscovery() {
-        this(new RandomLoadBalance());
+        this(RpcFrameworkConfig.load());
+    }
+
+    /** 文件注册中心与 ZooKeeper 发现路径共用相同的 SPI 策略选择规则。 */
+    public FileServiceDiscovery(RpcFrameworkConfig config) {
+        this(LoadBalanceFactory.create(config));
     }
 
     public FileServiceDiscovery(LoadBalance loadBalance) {
+        if (loadBalance == null) {
+            throw new IllegalArgumentException("loadBalance must not be null");
+        }
         this.loadBalance = loadBalance;
     }
 

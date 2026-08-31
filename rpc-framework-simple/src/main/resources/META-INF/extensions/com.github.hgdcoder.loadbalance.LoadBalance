@@ -1,0 +1,3 @@
+# Flower-RPC 负载均衡 SPI 配置；配置值直接使用左侧名称。
+random=com.github.hgdcoder.loadbalance.loadbalancer.RandomLoadBalance
+consistent-hash=com.github.hgdcoder.loadbalance.loadbalancer.ConsistentHashLoadBalance
