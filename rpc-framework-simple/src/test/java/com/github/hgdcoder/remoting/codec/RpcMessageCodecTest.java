@@ -27,6 +27,16 @@ class RpcMessageCodecTest {
     }
 
     @Test
+    void shouldRoundTripHessianFrame() throws Exception {
+        assertRoundTrip(RpcConstants.HESSIAN_CODEC);
+    }
+
+    @Test
+    void shouldRoundTripProtostuffFrame() throws Exception {
+        assertRoundTrip(RpcConstants.PROTOSTUFF_CODEC);
+    }
+
+    @Test
     void shouldRejectOversizedFrameBeforeAllocatingBody() throws Exception {
         ByteArrayOutputStream byteOut = new ByteArrayOutputStream();
         DataOutputStream dataOut = new DataOutputStream(byteOut);

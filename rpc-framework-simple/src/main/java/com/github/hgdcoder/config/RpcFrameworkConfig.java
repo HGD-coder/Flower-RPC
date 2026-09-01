@@ -1,5 +1,6 @@
 package com.github.hgdcoder.config;
 
+import com.github.hgdcoder.enums.SerializationTypeEnum;
 import com.github.hgdcoder.remoting.constants.RpcConstants;
 import lombok.Getter;
 
@@ -23,8 +24,17 @@ public final class RpcFrameworkConfig {
     public static final String LOAD_BALANCE_RANDOM = "random";
     public static final String LOAD_BALANCE_CONSISTENT_HASH = "consistent-hash";
 
-    public static final String SERIALIZER_JDK = "jdk";
-    public static final String SERIALIZER_KRYO = "kryo";
+    public static final String SERIALIZER_JDK =
+            SerializationTypeEnum.JDK.getName();
+
+    public static final String SERIALIZER_KRYO =
+            SerializationTypeEnum.KRYO.getName();
+
+    public static final String SERIALIZER_HESSIAN =
+            SerializationTypeEnum.HESSIAN.getName();
+
+    public static final String SERIALIZER_PROTOSTUFF =
+            SerializationTypeEnum.PROTOSTUFF.getName();
 
     public static final String COMPRESS_NONE = "none";
     public static final String COMPRESS_GZIP = "gzip";
@@ -126,12 +136,6 @@ public final class RpcFrameworkConfig {
                 LOAD_BALANCE_CONSISTENT_HASH
         );
 
-        this.serializer = normalizeChoice(
-                RpcConfigLoader.SERIALIZER_KEY,
-                builder.serializer,
-                SERIALIZER_JDK,
-                SERIALIZER_KRYO
-        );
 
         this.compress = normalizeChoice(
                 RpcConfigLoader.COMPRESS_KEY,
@@ -140,14 +144,20 @@ public final class RpcFrameworkConfig {
                 COMPRESS_GZIP
         );
 
+
         /*
-         * 把便于配置的字符串转换成 RPC 协议头真正使用的 byte 编号。
-         *
-         * 例如：
-         * serializer = "kryo"
-         * codec = RpcConstants.KRYO_CODEC
+         * 配置类不再手写所有序列化器选项。
+         * 枚举负责完成 name -> code 的统一映射。
          */
-        this.codec = serializerToCodec(this.serializer);
+        SerializationTypeEnum serializerType =
+                normalizeSerializer(
+                        RpcConfigLoader.SERIALIZER_KEY,
+                        builder.serializer
+                );
+
+        this.serializer = serializerType.getName();
+        this.codec = serializerType.getCode();
+
         this.compressType = compressToType(this.compress);
 
         this.connectTimeoutMillis = requirePositive(
@@ -312,16 +322,31 @@ public final class RpcFrameworkConfig {
         return value;
     }
 
+
     /**
-     * 将序列化器名称转换成协议编号。
-     * <p>
-     * 客户端会把这个 byte 写入 RPC 消息头，
-     * 服务端根据这个编号选择对应的反序列化器。
+     * 校验序列化器名称并转换成枚举。
+     *
+     * <p>支持的实现由 SerializationTypeEnum 统一维护，
+     * 不再受 normalizeChoice 只能列两个参数的限制。</p>
      */
-    private static byte serializerToCodec(String serializer) {
-        return SERIALIZER_JDK.equals(serializer)
-                ? RpcConstants.JDK_CODEC
-                : RpcConstants.KRYO_CODEC;
+    private static SerializationTypeEnum normalizeSerializer(
+            String key,
+            String rawValue
+    ) {
+        String normalized = requireText(
+                key,
+                rawValue
+        ).toLowerCase(Locale.ROOT);
+
+        try {
+            return SerializationTypeEnum.fromName(normalized);
+        } catch (IllegalArgumentException e) {
+            throw invalidValue(
+                    key,
+                    rawValue,
+                    e.getMessage()
+            );
+        }
     }
 
     /**
@@ -370,6 +395,8 @@ public final class RpcFrameworkConfig {
                         + reason
         );
     }
+
+
 
     /**
      * 配置对象的建造器。
@@ -484,6 +511,5 @@ public final class RpcFrameworkConfig {
         public RpcFrameworkConfig build() {
             return new RpcFrameworkConfig(this);
         }
-
     }
 }

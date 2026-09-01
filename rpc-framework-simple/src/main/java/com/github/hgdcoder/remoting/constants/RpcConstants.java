@@ -1,5 +1,7 @@
 package com.github.hgdcoder.remoting.constants;
 
+import com.github.hgdcoder.enums.SerializationTypeEnum;
+
 /**
  * Flower-RPC 自定义协议使用的固定常量。
  */
@@ -37,11 +39,23 @@ public final class RpcConstants {
      */
     public static final byte NO_CODEC = 0;
 
-    /** V8 暂时只支持 JDK 序列化。 */
-    public static final byte JDK_CODEC = 1;
+    /**
+     * 以下编号会写入 RPC 协议头。
+     *
+     * 已经发布的编号不能修改：
+     * JDK=1、Kryo=2 是旧版本已经使用的协议。
+     */
+    public static final byte JDK_CODEC =
+            SerializationTypeEnum.JDK.getCode();
 
-    /** Kryo 序列化（V9 正式推荐）。 */
-    public static final byte KRYO_CODEC = 2;
+    public static final byte KRYO_CODEC =
+            SerializationTypeEnum.KRYO.getCode();
+
+    public static final byte HESSIAN_CODEC =
+            SerializationTypeEnum.HESSIAN.getCode();
+
+    public static final byte PROTOSTUFF_CODEC =
+            SerializationTypeEnum.PROTOSTUFF.getCode();
 
     /** 兼容旧代码；V14 运行时由 RpcFrameworkConfig 选择 codec。 */
     public static final byte DEFAULT_CODEC = KRYO_CODEC;

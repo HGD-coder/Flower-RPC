@@ -30,6 +30,8 @@ class NettyRpcCodecTest {
         // 同一协议格式应能按两种已注册序列化器往返，还原请求号和业务字段。
         assertRoundTrip(RpcConstants.JDK_CODEC, 101);
         assertRoundTrip(RpcConstants.KRYO_CODEC, 102);
+        assertRoundTrip(RpcConstants.HESSIAN_CODEC, 103);
+        assertRoundTrip(RpcConstants.PROTOSTUFF_CODEC, 104);
     }
 
     @Test

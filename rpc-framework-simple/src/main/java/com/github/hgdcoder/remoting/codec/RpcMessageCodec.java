@@ -97,18 +97,11 @@ public final class RpcMessageCodec {
      * - RpcConstants.JDK_CODEC (1) -> "jdk"
      * - RpcConstants.KRYO_CODEC (2) -> "kryo"
      */
-    private Serializer getSerializer(byte codec){
-        String extensionName;
-        if(codec == RpcConstants.JDK_CODEC){
-            extensionName = "jdk";
-        }else if(codec == RpcConstants.KRYO_CODEC){
-            extensionName = "kryo";
-        }else{
-            throw new IllegalArgumentException("Unsupported codec: " + codec);
-        }
-        return ExtensionLoader.
-                getExtensionLoader(Serializer.class).
-                getExtension(extensionName);
+    /**
+     * BIO 旧传输层也复用统一的 codec -> SPI 解析过程。
+     */
+    private Serializer getSerializer(byte codec) {
+        return SerializerResolver.resolve(codec);
     }
 
 
@@ -120,9 +113,11 @@ public final class RpcMessageCodec {
          message.getMessageType()!= RpcConstants.RESPONSE_TYPE){
             throw new IllegalArgumentException("Unsupported message type:"+message.getMessageType());
         }
-        if(message.getCodec()!=RpcConstants.JDK_CODEC && message.getCodec() != RpcConstants.KRYO_CODEC){
-            throw new IllegalArgumentException("Unsupported codec:"+message.getCodec());
-        }
+        /*
+         * Resolver 可以识别 JDK、Kryo、Hessian 和 Protostuff。
+         * 遇到未知编号时，它会直接抛出 IllegalArgumentException。
+         */
+        SerializerResolver.resolve(message.getCodec());
         if(message.getCompress()!=RpcConstants.NO_COMPRESS){
             throw new IllegalArgumentException("Unsupported compress type:"+message.getCompress());
         }

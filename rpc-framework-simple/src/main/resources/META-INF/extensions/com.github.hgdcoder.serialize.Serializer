@@ -3,3 +3,5 @@
 
 jdk=com.github.hgdcoder.serialize.jdk.JdkSerializer
 kryo=com.github.hgdcoder.serialize.kryo.KryoSerializer
+hessian=com.github.hgdcoder.serialize.hessian.HessianSerializer
+protostuff=com.github.hgdcoder.serialize.protostuff.ProtostuffSerializer
