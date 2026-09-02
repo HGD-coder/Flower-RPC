@@ -3,6 +3,8 @@ package com.github.hgdcoder.serialize.kryo;
 import com.esotericsoftware.kryo.Kryo;
 import com.esotericsoftware.kryo.io.Input;
 import com.esotericsoftware.kryo.io.Output;
+import com.github.hgdcoder.enums.RpcErrorMessageEnum;
+import com.github.hgdcoder.exception.SerializeException;
 import com.github.hgdcoder.remoting.dto.RpcRequest;
 import com.github.hgdcoder.remoting.dto.RpcResponse;
 import com.github.hgdcoder.serialize.Serializer;
@@ -39,7 +41,11 @@ public class KryoSerializer implements Serializer {
             output.flush();
             return byteOut.toByteArray();
         }catch(Exception e){
-            throw new RuntimeException("Kryo serialize failed", e);
+            throw new SerializeException(
+                    RpcErrorMessageEnum.SERIALIZATION_FAILURE,
+                    "kryo",
+                    e
+            );
         }
     }
 
@@ -50,7 +56,11 @@ public class KryoSerializer implements Serializer {
             Kryo kryo = KRYO_HOLDER.get();
                 return kryo.readObject(input, targetClass);
         } catch (Exception e) {
-            throw new RuntimeException("Kryo deserialize failed: " + targetClass.getName(), e);
+            throw new SerializeException(
+                    RpcErrorMessageEnum.DESERIALIZATION_FAILURE,
+                    "kryo -> " + targetClass.getName(),
+                    e
+            );
         }
     }
 }

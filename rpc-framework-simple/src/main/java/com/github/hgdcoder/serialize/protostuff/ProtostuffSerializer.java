@@ -1,5 +1,7 @@
 package com.github.hgdcoder.serialize.protostuff;
 
+import com.github.hgdcoder.enums.RpcErrorMessageEnum;
+import com.github.hgdcoder.exception.SerializeException;
 import com.github.hgdcoder.serialize.Serializer;
 import io.protostuff.LinkedBuffer;
 import io.protostuff.ProtostuffIOUtil;
@@ -42,9 +44,9 @@ public class ProtostuffSerializer implements Serializer {
                     buffer
             );
         } catch (Exception e) {
-            throw new RuntimeException(
-                    "Protostuff serialize failed: "
-                            + object.getClass().getName(),
+            throw new SerializeException(
+                    RpcErrorMessageEnum.SERIALIZATION_FAILURE,
+                    "protostuff",
                     e
             );
         } finally {
@@ -82,9 +84,9 @@ public class ProtostuffSerializer implements Serializer {
 
             return object;
         } catch (Exception e) {
-            throw new RuntimeException(
-                    "Protostuff deserialize failed: "
-                            + targetClass.getName(),
+            throw new SerializeException(
+                    RpcErrorMessageEnum.DESERIALIZATION_FAILURE,
+                    "protostuff -> " + targetClass.getName(),
                     e
             );
         }

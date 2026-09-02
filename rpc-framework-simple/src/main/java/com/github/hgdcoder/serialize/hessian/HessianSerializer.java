@@ -1,5 +1,7 @@
 package com.github.hgdcoder.serialize.hessian;
 
+import com.github.hgdcoder.enums.RpcErrorMessageEnum;
+import com.github.hgdcoder.exception.SerializeException;
 import com.github.hgdcoder.serialize.Serializer;
 import com.caucho.hessian.io.HessianInput;
 import com.caucho.hessian.io.HessianOutput;
@@ -31,9 +33,9 @@ public class HessianSerializer implements Serializer {
 
             return outputStream.toByteArray();
         } catch (Exception e) {
-            throw new RuntimeException(
-                    "Hessian serialize failed: "
-                            + object.getClass().getName(),
+            throw new SerializeException(
+                    RpcErrorMessageEnum.SERIALIZATION_FAILURE,
+                    "hessian",
                     e
             );
         }
@@ -62,9 +64,9 @@ public class HessianSerializer implements Serializer {
             Object value = hessianInput.readObject();
             return targetClass.cast(value);
         } catch (Exception e) {
-            throw new RuntimeException(
-                    "Hessian deserialize failed: "
-                            + targetClass.getName(),
+            throw new SerializeException(
+                    RpcErrorMessageEnum.DESERIALIZATION_FAILURE,
+                    "hessian -> " + targetClass.getName(),
                     e
             );
         }

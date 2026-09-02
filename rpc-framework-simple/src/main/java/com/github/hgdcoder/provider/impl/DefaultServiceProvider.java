@@ -1,6 +1,8 @@
 package com.github.hgdcoder.provider.impl;
 
 import com.github.hgdcoder.config.RpcServiceConfig;
+import com.github.hgdcoder.enums.RpcErrorMessageEnum;
+import com.github.hgdcoder.exception.RpcException;
 import com.github.hgdcoder.provider.ServiceProvider;
 import com.github.hgdcoder.registry.ServiceRegistry;
 
@@ -49,7 +51,10 @@ public class DefaultServiceProvider implements ServiceProvider {
         Object service = serviceMap.get(rpcServiceName);
 
         if (service == null) {
-            throw new RuntimeException("No service found for name: " + rpcServiceName);
+            throw new RpcException(
+                    RpcErrorMessageEnum.SERVICE_CAN_NOT_BE_FOUND,
+                    rpcServiceName
+            );
         }
 
         return service;

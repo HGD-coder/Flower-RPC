@@ -1,6 +1,8 @@
 package com.github.hgdcoder.registry.zk;
 
 import com.github.hgdcoder.config.RpcFrameworkConfig;
+import com.github.hgdcoder.enums.RpcErrorMessageEnum;
+import com.github.hgdcoder.exception.RpcException;
 import com.github.hgdcoder.loadbalance.LoadBalance;
 import com.github.hgdcoder.loadbalance.LoadBalanceFactory;
 import com.github.hgdcoder.loadbalance.loadbalancer.RandomLoadBalance;
@@ -63,7 +65,10 @@ public class ZkServiceDiscovery implements ServiceDiscovery {
         );
 
         if (serviceAddresses.isEmpty()) {
-            throw new RuntimeException("No service address found for: " + rpcServiceName);
+            throw new RpcException(
+                    RpcErrorMessageEnum.SERVICE_CAN_NOT_BE_FOUND,
+                    rpcServiceName
+            );
         }
 
         // 服务发现负责提供候选列表，最终选择规则由负载均衡模块负责。
@@ -72,7 +77,12 @@ public class ZkServiceDiscovery implements ServiceDiscovery {
                 rpcRequest
         );
         if (selectedAddress == null || selectedAddress.trim().isEmpty()) {
-            throw new RuntimeException("Load balancer returned no address for: " + rpcServiceName);
+            throw new RpcException(
+                    RpcErrorMessageEnum.SERVICE_CAN_NOT_BE_FOUND,
+                    "负载均衡器没有为 "
+                            + rpcServiceName
+                            + " 选择节点"
+            );
         }
 
         return parseAddress(selectedAddress);

@@ -1,5 +1,7 @@
 package com.github.hgdcoder.remoting.handler;
 
+import com.github.hgdcoder.enums.RpcErrorMessageEnum;
+import com.github.hgdcoder.exception.RpcException;
 import com.github.hgdcoder.provider.ServiceProvider;
 import com.github.hgdcoder.remoting.dto.RpcRequest;
 
@@ -20,8 +22,15 @@ public class RpcRequestHandler {
                     rpcRequest.getParamTypes()
             );
             return method.invoke(service,rpcRequest.getParameters());
-        }catch (Exception e){
-            throw new RuntimeException("Rpc request handle failed",e);
+        }catch (RpcException e){
+            // 已经是明确分类的 RPC 异常，不再重复包装。
+            throw e;
+        } catch (Exception e) {
+            throw new RpcException(
+                    RpcErrorMessageEnum.SERVICE_INVOCATION_FAILURE,
+                    rpcRequest.getRpcServiceName() + "#" + rpcRequest.getMethodName(),
+                    e
+            );
         }
     }
 }

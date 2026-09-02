@@ -1,5 +1,7 @@
 package com.github.hgdcoder.serialize.jdk;
 
+import com.github.hgdcoder.enums.RpcErrorMessageEnum;
+import com.github.hgdcoder.exception.SerializeException;
 import com.github.hgdcoder.serialize.Serializer;
 
 import java.io.ByteArrayInputStream;
@@ -22,7 +24,11 @@ public class JdkSerializer implements Serializer {
             objectOut.flush();
             return byteOut.toByteArray();
         }catch (Exception e) {
-            throw new RuntimeException("JDK serialize failed",e);
+            throw new SerializeException(
+                    RpcErrorMessageEnum.SERIALIZATION_FAILURE,
+                    "jdk",
+                    e
+            );
         }
     }
 
@@ -33,7 +39,11 @@ public class JdkSerializer implements Serializer {
             Object object = objectIn.readObject();
             return targetClass.cast(object);
         }catch (Exception e){
-            throw new RuntimeException("JDK deserialize failed: "+targetClass.getName(),e);
+            throw new SerializeException(
+                    RpcErrorMessageEnum.DESERIALIZATION_FAILURE,
+                    "jdk -> " + targetClass.getName(),
+                    e
+            );
         }
     }
 }

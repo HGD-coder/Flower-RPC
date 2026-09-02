@@ -1,6 +1,8 @@
 package com.github.hgdcoder.proxy;
 
+import com.github.hgdcoder.enums.RpcErrorMessageEnum;
 import com.github.hgdcoder.enums.RpcResponseCodeEnum;
+import com.github.hgdcoder.exception.RpcException;
 import com.github.hgdcoder.remoting.dto.RpcRequest;
 import com.github.hgdcoder.remoting.dto.RpcResponse;
 import com.github.hgdcoder.transport.RpcRequestTransport;
@@ -52,18 +54,36 @@ public class RpcClientProxy implements InvocationHandler {
         return rpcResponse.getData();
     }
 
-    private void check(RpcRequest rpcRequest, RpcResponse<?> rpcResponse) {
-        if(rpcResponse==null){
-            throw new RuntimeException("Rpc Response is null");
+    private void check(
+            RpcRequest rpcRequest,
+            RpcResponse<?> rpcResponse
+    ) {
+        if (rpcResponse == null) {
+            throw new RpcException(
+                    RpcErrorMessageEnum.REQUEST_NOT_MATCH_RESPONSE,
+                    "响应对象为空，requestId="
+                            + rpcRequest.getRequestId()
+            );
         }
 
-        if(!rpcRequest.getRequestId().equals(rpcResponse.getRequestId())){
-            throw new RuntimeException("Request and response id do not match");
+        if (!rpcRequest.getRequestId()
+                .equals(rpcResponse.getRequestId())) {
+            throw new RpcException(
+                    RpcErrorMessageEnum.REQUEST_NOT_MATCH_RESPONSE,
+                    "requestId=" + rpcRequest.getRequestId()
+                            + ", responseId="
+                            + rpcResponse.getRequestId()
+            );
         }
 
-        Integer successCode= RpcResponseCodeEnum.SUCCESS.getCode();
-        if(!successCode.equals(rpcResponse.getCode())){
-            throw new RuntimeException("Rpc call failed: "+rpcResponse.getMessage());
+        Integer successCode =
+                RpcResponseCodeEnum.SUCCESS.getCode();
+
+        if (!successCode.equals(rpcResponse.getCode())) {
+            throw new RpcException(
+                    RpcErrorMessageEnum.SERVICE_INVOCATION_FAILURE,
+                    rpcResponse.getMessage()
+            );
         }
     }
 
