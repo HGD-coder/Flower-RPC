@@ -2,7 +2,10 @@ package com.github.hgdcoder.transport.netty.client;
 
 import com.github.hgdcoder.config.RpcFrameworkConfig;
 import com.github.hgdcoder.config.RpcServiceConfig;
+import com.github.hgdcoder.enums.RpcStatusCode;
+import com.github.hgdcoder.exception.RpcServiceException;
 import com.github.hgdcoder.provider.impl.DefaultServiceProvider;
+import com.github.hgdcoder.proxy.RpcClientProxy;
 import com.github.hgdcoder.registry.ServiceDiscovery;
 import com.github.hgdcoder.remoting.constants.RpcConstants;
 import com.github.hgdcoder.remoting.dto.RpcRequest;
@@ -14,6 +17,7 @@ import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -134,6 +138,49 @@ class NettyRpcLocalEndToEndTest {
         }
     }
 
+    @Test
+    void shouldTransportStructuredBusinessFailure() {
+        TestContext context = startContext(3000);
+        try {
+            RpcResponse<?> response = send(
+                    context.client,
+                    "failSafely",
+                    new Object[0],
+                    new Class<?>[0]
+            );
+
+            assertEquals(RpcStatusCode.NOT_FOUND.getCode(), response.getCode());
+            assertEquals("订单不存在", response.getMessage());
+            assertTrue(!response.isSuccess());
+        } finally {
+            context.close();
+        }
+    }
+
+    @Test
+    void shouldInvokeServiceThroughNonBlockingAsyncProxy() throws Exception {
+        TestContext context = startContext(3000);
+        try {
+            EchoServiceAsync asyncService = new RpcClientProxy(
+                    context.client,
+                    "test",
+                    "1.0"
+            ).getAsyncProxy(EchoServiceAsync.class, EchoService.class);
+
+            // 服务端会等待 200 ms；如果代理是异步的，当前方法应立即拿到未完成 Future。
+            CompletableFuture<String> resultFuture =
+                    asyncService.echo("async", 200L);
+            assertTrue(!resultFuture.isDone());
+            assertEquals(
+                    "echo:async",
+                    resultFuture.get(2, TimeUnit.SECONDS)
+            );
+            assertEquals(0, context.client.getPendingRequestCount());
+        } finally {
+            context.close();
+        }
+    }
+
     private TestContext startContext(int requestTimeoutMillis) {
         // 端口 0 让操作系统分配空闲端口，避免测试机器上的固定端口冲突。
         DefaultServiceProvider provider = new DefaultServiceProvider();
@@ -153,22 +200,43 @@ class NettyRpcLocalEndToEndTest {
 
     private String call(NettyRpcClient client, String value, long delayMillis) {
         // 通过真实客户端调用回声服务；delayMillis 用于让服务端业务晚于客户端超时或关闭。
+        RpcResponse<?> response = send(
+                client,
+                "echo",
+                new Object[]{value, delayMillis},
+                new Class<?>[]{String.class, long.class}
+        );
+        assertEquals(RpcStatusCode.OK.getCode(), response.getCode());
+        return (String) response.getData();
+    }
+
+    private RpcResponse<?> send(
+            NettyRpcClient client,
+            String methodName,
+            Object[] parameters,
+            Class<?>[] parameterTypes
+    ) {
         RpcRequest request = RpcRequest.builder()
                 .requestId(UUID.randomUUID().toString())
                 .interfaceName(EchoService.class.getName())
-                .methodName("echo")
-                .parameters(new Object[]{value, delayMillis})
-                .paramTypes(new Class<?>[]{String.class, long.class})
+                .methodName(methodName)
+                .parameters(parameters)
+                .paramTypes(parameterTypes)
                 .group("test")
                 .version("1.0")
                 .build();
-        RpcResponse<?> response = (RpcResponse<?>) client.sendRpcRequest(request);
-        assertEquals(200, response.getCode());
-        return (String) response.getData();
+        return client.sendRpcRequest(request).join();
     }
 
     public interface EchoService {
         String echo(String value, long delayMillis);
+
+        String failSafely();
+    }
+
+    /** 客户端异步镜像；服务端不会实现或注册这个接口。 */
+    public interface EchoServiceAsync {
+        CompletableFuture<String> echo(String value, long delayMillis);
     }
 
     public static class EchoServiceImpl implements EchoService {
@@ -183,6 +251,14 @@ class NettyRpcLocalEndToEndTest {
                 }
             }
             return "echo:" + value;
+        }
+
+        @Override
+        public String failSafely() {
+            throw new RpcServiceException(
+                    RpcStatusCode.NOT_FOUND,
+                    "订单不存在"
+            );
         }
     }
 

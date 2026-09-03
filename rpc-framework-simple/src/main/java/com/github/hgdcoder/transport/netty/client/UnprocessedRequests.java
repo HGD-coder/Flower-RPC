@@ -24,7 +24,7 @@ final class UnprocessedRequests {
      * @param timeoutMillis 等待响应的最长时间
      * @return 调用线程等待的 Future；请求号重复时返回 null，调用方应换号后重试
      */
-    CompletableFuture<RpcResponse<?>> register(int requestId,Channel channel,long timeoutMillis) {
+    CompletableFuture<RpcResponse<Object>> register(int requestId,Channel channel,long timeoutMillis) {
         PendingRequest pending = new PendingRequest(channel);
         if(requests.putIfAbsent(requestId,pending) != null) {
             return null;
@@ -51,13 +51,14 @@ final class UnprocessedRequests {
      * 收到响应时完成对应 Future，并取消仍未执行的超时任务。
      * 返回 false 表示该请求已超时或已被其他失败路径清理，迟到响应会被安全忽略。
      */
+    @SuppressWarnings("unchecked")
     boolean complete(int requestId,RpcResponse<?> response) {
         PendingRequest pending = requests.remove(requestId);
         if(pending == null) {
             return false;
         }
         pending.cancelTimeout();
-        pending.future.complete(response);
+        pending.future.complete((RpcResponse<Object>)response);
         return true;
     }
 
@@ -107,7 +108,7 @@ final class UnprocessedRequests {
         // 用引用比较关联 Channel，防止同地址的新连接误伤旧连接上的请求。
         private final Channel channel;
         // 只会由响应或某条失败路径完成一次，调用线程在客户端中等待它。
-        private final CompletableFuture<RpcResponse<?>> future = new CompletableFuture<>();
+        private final CompletableFuture<RpcResponse<Object>> future = new CompletableFuture<>();
         // 超时任务与响应到达存在竞态，原子引用保证两者可安全交接并取消任务。
         private final AtomicReference<ScheduledFuture<?>> timeoutFuture = new AtomicReference<>();
 

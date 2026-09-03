@@ -2,9 +2,14 @@ package com.github.hgdcoder.transport.socket;
 
 import com.github.hgdcoder.registry.ServiceDiscovery;
 import com.github.hgdcoder.remoting.dto.RpcRequest;
+import com.github.hgdcoder.remoting.dto.RpcResponse;
 import com.github.hgdcoder.transport.RpcRequestTransport;
 
 import java.net.InetSocketAddress;
+import java.util.Set;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * 基于阻塞 Socket 的 RPC 客户端。
@@ -12,7 +17,7 @@ import java.net.InetSocketAddress;
  * V7 的核心变化：
  * 从“每个线程只有一条连接”改为“每个线程、每个服务地址一条连接”。
  */
-public class SocketRpcClient implements RpcRequestTransport {
+public class SocketRpcClient implements RpcRequestTransport,AutoCloseable {
     private static final int DEFAULT_CONNECT_TIMEOUT_MILLIS = 3000;
     private static final int DEFAULT_READ_TIMEOUT_MILLIS = 5000;
 
@@ -29,11 +34,30 @@ public class SocketRpcClient implements RpcRequestTransport {
             new SocketConnectionProvider();
 
     /**
+     * BIO 的 read/write 会阻塞线程，因此不能直接在调用方线程执行。
+     * 这里用独立工作线程包装阻塞操作，对外仍返回异步 Future。
+     */
+    private final ExecutorService ioExecutor;
+
+    private final AtomicBoolean closed = new AtomicBoolean();
+
+    /** close 时用于唤醒尚未完成的 BIO 调用，包括仍在队列中的任务。 */
+    private final Set<CompletableFuture<RpcResponse<Object>>> activeRequests =
+            ConcurrentHashMap.newKeySet();
+
+    /**
      * V4 usage:
      * new SocketRpcClient(new FileServiceDiscovery())
      */
     public SocketRpcClient(ServiceDiscovery serviceDiscovery) {
+        if (serviceDiscovery == null) {
+            throw new IllegalArgumentException("serviceDiscovery must not be null");
+        }
         this.serviceDiscovery = serviceDiscovery;
+        this.ioExecutor = Executors.newFixedThreadPool(
+                Math.max(2, Runtime.getRuntime().availableProcessors()),
+                new SocketIoThreadFactory()
+        );
     }
 
     /**
@@ -46,24 +70,44 @@ public class SocketRpcClient implements RpcRequestTransport {
      * -> SocketConnection.send(...)
      */
     @Override
-    public Object sendRpcRequest(RpcRequest rpcRequest) {
-        InetSocketAddress address = serviceDiscovery.lookupService(rpcRequest);
-        SocketConnection connection = getOrCreateConnection(address);
+    public CompletableFuture<RpcResponse<Object>> sendRpcRequest(RpcRequest rpcRequest) {
+        if (closed.get()) {
+            return failedFuture(new IllegalStateException("Socket RPC client is closed"));
+        }
 
+        CompletableFuture<RpcResponse<Object>> resultFuture = new CompletableFuture<>();
+        activeRequests.add(resultFuture);
+        resultFuture.whenComplete((response, throwable) ->
+                activeRequests.remove(resultFuture));
         try {
-            return connection.send(rpcRequest);
-        } catch (Exception e) {
-            /*
-             * 当前地址调用失败，只删除该地址对应的连接。
-             *
-             * 例如 9999 失败时：
-             * 删除 Socket-9999
-             * 保留 Socket-9998
-             * 保留 Socket-10000
-             */
-            connectionProvider.remove(address);
+            ioExecutor.execute(() -> sendBlocking(rpcRequest, resultFuture));
+        } catch (RejectedExecutionException e) {
+            resultFuture.completeExceptionally(e);
+        }
+        return resultFuture;
+    }
 
-            throw new RuntimeException("Send rpc request failed:" + address, e);
+    /** 真正的阻塞 Socket 调用只在专用 BIO 工作线程中执行。 */
+    @SuppressWarnings("unchecked")
+    private void sendBlocking(
+            RpcRequest rpcRequest,
+            CompletableFuture<RpcResponse<Object>> resultFuture
+    ) {
+        InetSocketAddress address = null;
+        try {
+            if (closed.get()) {
+                throw new IllegalStateException("Socket RPC client is closed");
+            }
+            address = serviceDiscovery.lookupService(rpcRequest);
+            SocketConnection connection = getOrCreateConnection(address);
+            Object response = connection.send(rpcRequest);
+            resultFuture.complete((RpcResponse<Object>) response);
+        } catch (Exception e) {
+            // 当前地址失败时只删除当前工作线程到该地址的连接。
+            if (address != null) {
+                connectionProvider.remove(address);
+            }
+            resultFuture.completeExceptionally(e);
         }
     }
 
@@ -112,4 +156,44 @@ public class SocketRpcClient implements RpcRequestTransport {
         connectionProvider.resetStatistics();
     }
 
+    /**
+     * 停止接收新请求。每个 BIO 工作线程退出时，ThreadFactory 包装层会关闭
+     * 该线程 ThreadLocal 中保存的全部 Socket 连接。
+     */
+    @Override
+    public void close() {
+        if (closed.compareAndSet(false, true)) {
+            IllegalStateException cause =
+                    new IllegalStateException("Socket RPC client is closed");
+            for (CompletableFuture<RpcResponse<Object>> request : activeRequests) {
+                request.completeExceptionally(cause);
+            }
+            ioExecutor.shutdownNow();
+        }
+    }
+
+    /** JDK 8 兼容版失败 Future。 */
+    private static <T> CompletableFuture<T> failedFuture(Throwable throwable) {
+        CompletableFuture<T> future = new CompletableFuture<>();
+        future.completeExceptionally(throwable);
+        return future;
+    }
+
+    /** 创建守护线程，并保证线程结束时释放它私有的地址级连接缓存。 */
+    private final class SocketIoThreadFactory implements ThreadFactory {
+        private final AtomicInteger sequence = new AtomicInteger();
+
+        @Override
+        public Thread newThread(Runnable worker) {
+            Thread thread = new Thread(() -> {
+                try {
+                    worker.run();
+                } finally {
+                    connectionProvider.closeCurrentThreadConnection();
+                }
+            }, "flower-rpc-bio-client-" + sequence.incrementAndGet());
+            thread.setDaemon(true);
+            return thread;
+        }
+    }
 }

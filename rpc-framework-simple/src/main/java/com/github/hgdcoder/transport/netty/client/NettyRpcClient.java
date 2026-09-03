@@ -20,15 +20,15 @@ import io.netty.handler.timeout.IdleStateHandler;
 
 
 import java.net.InetSocketAddress;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
- * 基于 Netty 的同步 RPC 客户端；网络收发异步，公共传输接口保持同步。
+ * 基于 Netty 的异步 RPC 客户端；从建连、写出到等待响应都不阻塞调用线程。
  * 调用链为: 服务发现 -> 连接提供者 -> pending 登记 -> Pipeline 出站编码 -> 网络发送，
  * 响应则经入站解码和客户端处理器完成 Future，最后由本类等待并返回结果。
  */
@@ -53,7 +53,7 @@ public class NettyRpcClient implements RpcRequestTransport,AutoCloseable {
     // 客户端 I/O 线程组，close 后不可重启，因此整个 NettyRpcClient 也不可重用。
     private final EventLoopGroup eventLoopGroup;
 
-    // 跨连接共享的请求号到 Future 映射，负责唤醒同步等待的业务调用线程。
+    // 跨连接共享的请求号到 Future 映射，响应到达时完成对应 Future。
     private final UnprocessedRequests unprocessedRequests = new UnprocessedRequests();
 
     // 连接缓存和并发建连占位逻辑由此封装。
@@ -137,7 +137,7 @@ public class NettyRpcClient implements RpcRequestTransport,AutoCloseable {
                         );
                     }
                 });
-        this.channelProvider = new NettyChannelProvider(bootstrap,connectTimeoutMillis);
+        this.channelProvider = new NettyChannelProvider(bootstrap);
     }
 
 
@@ -155,66 +155,100 @@ public class NettyRpcClient implements RpcRequestTransport,AutoCloseable {
 
 
     /**
-     * 发送一次请求并同步等待响应，保持 RpcRequestTransport 对调用方的同步语义。
+     * 发起一次异步 RPC 请求。
      *
      * @param rpcRequest 业务层请求，服务发现使用它定位服务，消息体直接携带它
-     * @return 服务端返回的 RpcResponse
+     * @return 立即返回的响应 Future，调用线程不会在这里等待网络响应
      * 调用时先登记 pending 再 writeAndFlush，避免极快响应在登记前到达而丢失。
      */
     @Override
-    public Object sendRpcRequest(RpcRequest rpcRequest) {
+    public CompletableFuture<RpcResponse<Object>> sendRpcRequest(RpcRequest rpcRequest) {
         if(closed.get()){
-            throw new IllegalStateException("Netty RPC client is closed");
+            return failedFuture(new IllegalStateException("Netty RPC client is closed"));
         }
-        InetSocketAddress address = serviceDiscovery.lookupService(rpcRequest);
-        CompletableFuture<RpcResponse<?>> responseFuture;
-        int requestId;
-        lifecycleLock.readLock().lock();
-        try{
-            if(closed.get()){
-                throw new IllegalStateException("Netty RPC client is closed");
+        final InetSocketAddress address;
+        try {
+            address = serviceDiscovery.lookupService(rpcRequest);
+        } catch (RuntimeException e) {
+            return failedFuture(e);
+        }
+
+        CompletableFuture<RpcResponse<Object>> resultFuture = new CompletableFuture<>();
+
+        // 建连本身也是异步的；连接可用后，回调才登记 pending 并写出请求。
+        channelProvider.getChannelAsync(address).whenComplete((channel,connectError)->{
+            if(connectError != null){
+                resultFuture.completeExceptionally(connectError);
+                return;
             }
-            Channel channel = channelProvider.getChannel(address);
 
-            do{
-                requestId = nextRequestId();
-                responseFuture = unprocessedRequests.register(
-                        requestId,
-                        channel,
-                        requestTimeoutMillis
-                );
-            } while (responseFuture == null);
-
-            RpcMessage requestMessage = RpcMessage.builder()
-                    .messageType(RpcConstants.REQUEST_TYPE)
-                    .codec(codec)
-                    .compress(compress)
-                    .requestId(requestId)
-                    .data(rpcRequest)
-                    .build();
-
-            final int currentRequestId = requestId;
-            ChannelFuture writeFuture = channel.writeAndFlush(requestMessage);
-            writeFuture.addListener(future->{
-                if(!future.isSuccess()){
-                    unprocessedRequests.fail(currentRequestId,future.cause());
+            lifecycleLock.readLock().lock();
+            try{
+                if(closed.get()){
+                    resultFuture.completeExceptionally(
+                            new IllegalStateException("Netty RPC client is closed")
+                    );
+                    return;
                 }
-            });
-        }finally {
-            lifecycleLock.readLock().unlock();
-        }
+                if(resultFuture.isDone()){
+                    return;
+                }
 
-        try{
-            //阻塞等待
-            return responseFuture.get();
-        }catch(InterruptedException e){
-            unprocessedRequests.fail(requestId,e);
-            Thread.currentThread().interrupt();
-            throw new RuntimeException("RPC request interrupted: " + address, e);
-        }catch(ExecutionException e) {
-            Throwable cause = e.getCause() == null ? e : e.getCause();
-            throw new RuntimeException("Send RPC request failed: " + address, cause);
-        }
+                int requestId;
+                CompletableFuture<RpcResponse<Object>> pendingFuture;
+                do{
+                    requestId = nextRequestId();
+                    pendingFuture = unprocessedRequests.register(
+                            requestId,
+                            channel,
+                            requestTimeoutMillis
+                    );
+                }while (pendingFuture == null);
+
+                final int currentRequestId = requestId;
+
+                // pending 的响应或异常，最终传递给公开返回的 resultFuture。
+                pendingFuture.whenComplete((response,responseError)->{
+                    if(responseError != null){
+                        resultFuture.completeExceptionally(responseError);
+                    }else{
+                        resultFuture.complete(response);
+                    }
+                });
+
+                // 用户取消异步调用时，立即从 pending 表删除并取消超时任务。
+                resultFuture.whenComplete((response,responseError)->{
+                    if(resultFuture.isCancelled()){
+                        unprocessedRequests.fail(
+                                currentRequestId,
+                                new CancellationException("RPC request was cancelled")
+                        );
+                    }
+                });
+
+
+                RpcMessage requestMessage = RpcMessage.builder()
+                        .messageType(RpcConstants.REQUEST_TYPE)
+                        .codec(codec)
+                        .compress(compress)
+                        .requestId(currentRequestId)
+                        .data(rpcRequest)
+                        .build();
+
+                ChannelFuture writeFuture = channel.writeAndFlush(requestMessage);
+                writeFuture.addListener(future->{
+                    if(!future.isSuccess()){
+                        unprocessedRequests.fail(currentRequestId,future.cause());
+                    }
+                });
+            }catch (RuntimeException e){
+                resultFuture.completeExceptionally(e);
+            }finally {
+                lifecycleLock.readLock().unlock();
+            }
+        });
+
+        return resultFuture;
     }
 
     /**
@@ -267,6 +301,13 @@ public class NettyRpcClient implements RpcRequestTransport,AutoCloseable {
 
     int getPendingRequestCount() {
         return unprocessedRequests.size();
+    }
+
+    /** JDK 8 没有 CompletableFuture.failedFuture，所以由本类创建失败 Future。 */
+    private static <T> CompletableFuture<T> failedFuture(Throwable throwable) {
+        CompletableFuture<T> future = new CompletableFuture<>();
+        future.completeExceptionally(throwable);
+        return future;
     }
 
     /**

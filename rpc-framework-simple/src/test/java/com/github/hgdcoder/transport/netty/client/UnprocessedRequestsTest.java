@@ -23,7 +23,7 @@ class UnprocessedRequestsTest {
         EmbeddedChannel channel = new EmbeddedChannel();
         UnprocessedRequests requests = new UnprocessedRequests();
         try {
-            CompletableFuture<RpcResponse<?>> future = requests.register(1, channel, 1000);
+            CompletableFuture<RpcResponse<Object>> future = requests.register(1, channel, 1000);
             RpcResponse<String> response = RpcResponse.success("ok", "business-1");
             assertTrue(requests.complete(1, response));
             assertEquals("ok", future.get().getData());
@@ -40,15 +40,15 @@ class UnprocessedRequestsTest {
         EmbeddedChannel secondChannel = new EmbeddedChannel();
         UnprocessedRequests requests = new UnprocessedRequests();
         try {
-            CompletableFuture<RpcResponse<?>> writeFailed =
+            CompletableFuture<RpcResponse<Object>> writeFailed =
                     requests.register(2, firstChannel, 1000);
             requests.fail(2, new IllegalStateException("write failed"));
             assertExceptional(writeFailed);
             assertEquals(0, requests.size());
 
-            CompletableFuture<RpcResponse<?>> channelClosed =
+            CompletableFuture<RpcResponse<Object>> channelClosed =
                     requests.register(3, firstChannel, 1000);
-            CompletableFuture<RpcResponse<?>> clientClosed =
+            CompletableFuture<RpcResponse<Object>> clientClosed =
                     requests.register(4, secondChannel, 1000);
             requests.failChannel(firstChannel, new IllegalStateException("channel closed"));
             assertExceptional(channelClosed);
@@ -68,7 +68,7 @@ class UnprocessedRequestsTest {
         EmbeddedChannel channel = new EmbeddedChannel();
         UnprocessedRequests requests = new UnprocessedRequests();
         try {
-            CompletableFuture<RpcResponse<?>> future = requests.register(5, channel, 10);
+            CompletableFuture<RpcResponse<Object>> future = requests.register(5, channel, 10);
             // EmbeddedChannel 不会自动推进计划任务；等待到期后显式执行，验证超时也会清理 pending。
             Thread.sleep(20L);
             channel.runScheduledPendingTasks();

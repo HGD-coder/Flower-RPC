@@ -1,6 +1,7 @@
 package com.github.hgdcoder.exception;
 
 import com.github.hgdcoder.enums.RpcErrorMessageEnum;
+import com.github.hgdcoder.enums.RpcStatusCode;
 
 /**
  * Flower-RPC 的统一运行时异常。
@@ -13,6 +14,8 @@ public class RpcException extends RuntimeException {
     private static final long serialVersionUID = 1L;
 
     private final RpcErrorMessageEnum errorType;
+    private final RpcStatusCode statusCode;
+    private final String requestId;
 
     public RpcException(RpcErrorMessageEnum errorType) {
         this(errorType, null, null);
@@ -27,15 +30,46 @@ public class RpcException extends RuntimeException {
             String detail,
             Throwable cause
     ) {
-        super(buildMessage(errorType, detail), cause);
-        if (errorType == null) {
-            throw new IllegalArgumentException("errorType must not be null");
-        }
+        this(requireErrorType(errorType).getStatusCode(), null,
+                buildMessage(errorType, detail), cause, errorType);
+    }
+
+    public RpcException(RpcStatusCode statusCode, String detail) {
+        this(statusCode, null, detail, null, null);
+    }
+
+    public RpcException(
+            RpcStatusCode statusCode,
+            String requestId,
+            String detail,
+            Throwable cause
+    ) {
+        this(statusCode, requestId, detail, cause, null);
+    }
+
+    private RpcException(
+            RpcStatusCode statusCode,
+            String requestId,
+            String detail,
+            Throwable cause,
+            RpcErrorMessageEnum errorType
+    ) {
+        super(buildStatusMessage(statusCode, detail), cause);
+        this.statusCode = requireStatusCode(statusCode);
+        this.requestId = requestId;
         this.errorType = errorType;
     }
 
     public RpcErrorMessageEnum getErrorType() {
         return errorType;
+    }
+
+    public RpcStatusCode getStatusCode() {
+        return statusCode;
+    }
+
+    public String getRequestId() {
+        return requestId;
     }
 
     private static String buildMessage(
@@ -49,5 +83,34 @@ public class RpcException extends RuntimeException {
             return errorType.getMessage();
         }
         return errorType.getMessage() + ": " + detail;
+    }
+
+    private static String buildStatusMessage(
+            RpcStatusCode statusCode,
+            String detail
+    ) {
+        RpcStatusCode required = requireStatusCode(statusCode);
+        if (detail == null || detail.trim().isEmpty()) {
+            return required.getMessage();
+        }
+        return detail;
+    }
+
+    private static RpcErrorMessageEnum requireErrorType(
+            RpcErrorMessageEnum errorType
+    ) {
+        if (errorType == null) {
+            throw new IllegalArgumentException("errorType must not be null");
+        }
+        return errorType;
+    }
+
+    private static RpcStatusCode requireStatusCode(RpcStatusCode statusCode) {
+        if (statusCode == null || statusCode == RpcStatusCode.OK) {
+            throw new IllegalArgumentException(
+                    "exception statusCode must be a non-OK value"
+            );
+        }
+        return statusCode;
     }
 }

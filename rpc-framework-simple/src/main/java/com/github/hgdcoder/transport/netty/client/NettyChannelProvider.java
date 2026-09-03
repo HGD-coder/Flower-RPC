@@ -8,7 +8,8 @@ import io.netty.channel.ChannelFuture;
 
 import java.net.InetSocketAddress;
 import java.util.Map;
-import java.util.concurrent.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
@@ -19,8 +20,6 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 final class NettyChannelProvider {
     // 由 NettyRpcClient 在创建时配置，所有异步连接都从同一个 Bootstrap 发起。
     private final Bootstrap bootstrap;
-    // 等待连接占位 Future 的最长时间，比底层 connect 超时略长以覆盖回调调度
-    private final int connectTimeoutMillis;
     // 地址到连接占位 Future 的并发缓存。同一地址的并发调用共享一个 Future，避免重复建连。
     private final ConcurrentHashMap<String, CompletableFuture<Channel>> channels = new ConcurrentHashMap<>();
 
@@ -33,41 +32,50 @@ final class NettyChannelProvider {
     /**
      * 创建连接缓存。Bootstrap 的 Pipeline 已由客户端预先配置完成。
      */
-    NettyChannelProvider(final Bootstrap bootstrap, final int connectTimeoutMillis) {
+    NettyChannelProvider(final Bootstrap bootstrap) {
         this.bootstrap = bootstrap;
-        this.connectTimeoutMillis = connectTimeoutMillis;
     }
 
-    Channel getChannel(InetSocketAddress address) {
+
+    /**
+     * 异步获取连接，不调用 Future.get()，因此不会阻塞业务线程。
+     * 同一地址并发建连时，所有调用共享同一个 slot Future。
+     */
+    CompletableFuture<Channel> getChannelAsync(InetSocketAddress address) {
         lifecycleLock.readLock().lock();
         try{
             if(closed){
-                throw new IllegalStateException("Netty RPC client is closed");
+                return failedFuture(
+                        new IllegalStateException("Netty RPC client is closed")
+                );
             }
             String key = buildKey(address);
-            for(;;) {
-                CompletableFuture<Channel> slot = channels.get(key);
-                boolean creator = false;
+            CompletableFuture<Channel> slot = channels.get(key);
+            boolean creator = false;
+            if(slot == null) {
+                CompletableFuture<Channel> newSlot = new CompletableFuture<>();
+                slot = channels.putIfAbsent(key, newSlot);
                 if(slot == null) {
-                    CompletableFuture<Channel> newSlot = new CompletableFuture<>();
-                    slot = channels.putIfAbsent(key, newSlot);
-                    if(slot == null) {
-                        slot = newSlot;
-                        creator = true;
-                        connect(address,key,slot);
-                    }
+                    slot = newSlot;
+                    creator = true;
+                    connect(address,key,slot);
                 }
+            }
 
-                Channel channel = awaitChannel(key, slot);
-                if(channel.isActive()) {
-                    if(!creator) {
+            final CompletableFuture<Channel> currentSlot = slot;
+            final boolean createdByCurrentCall = creator;
+            return slot.thenCompose(channel->{
+                if(channel.isActive()){
+                    if(!createdByCurrentCall) {
                         reusedConnections.increment();
                     }
-                    return channel;
+                    return CompletableFuture.completedFuture(channel);
                 }
-                channels.remove(key,slot);
+                // 连接已经失效，删除旧槽位并重新走一次异步获取流程。
+                channels.remove(key,currentSlot);
                 channel.close();
-            }
+                return getChannelAsync(address);
+            });
         }finally {
             lifecycleLock.readLock().unlock();
         }
@@ -86,7 +94,7 @@ final class NettyChannelProvider {
         }catch(RuntimeException e){
             channels.remove(key,slot);
             slot.completeExceptionally(e);
-            throw e;
+            return;
         }
         connectFuture.addListener(future->{
             if(future.isSuccess()){
@@ -107,24 +115,6 @@ final class NettyChannelProvider {
                 slot.completeExceptionally(future.cause());
             }
         });
-    }
-
-    /**
-     * 等待连接槽位完成。失败或超时时会移除槽位，使下一次请求可以重新尝试建连。
-     */
-    private Channel awaitChannel(String key,CompletableFuture<Channel> slot) {
-        try{
-            return slot.get(connectTimeoutMillis + 1000L , TimeUnit.MILLISECONDS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            channels.remove(key,slot);
-            slot.completeExceptionally(e);
-            throw new RuntimeException("Interrupted while creating RPC channel", e);
-        } catch (ExecutionException | TimeoutException e){
-            channels.remove(key,slot);
-            slot.completeExceptionally(e);
-            throw new RuntimeException("Create RPC channel failed: " + key, e);
-        }
     }
 
     /**
@@ -162,6 +152,11 @@ final class NettyChannelProvider {
                 Channel channel = slot.getNow(null);
                 if (channel != null) {
                     channel.close().syncUninterruptibly();
+                } else {
+                    // 唤醒正在等待建连结果的异步 RPC，避免 close 后继续悬挂。
+                    slot.completeExceptionally(
+                            new IllegalStateException("RPC channel provider was closed")
+                    );
                 }
             }
         }
@@ -187,5 +182,12 @@ final class NettyChannelProvider {
 
     private String buildKey(InetSocketAddress address) {
         return "[" + address.getHostString() + "]:" + address.getPort();
+    }
+
+    /** JDK 8 兼容版的失败 Future 工具。 */
+    private static <T> CompletableFuture<T> failedFuture(Throwable throwable) {
+        CompletableFuture<T> future = new CompletableFuture<>();
+        future.completeExceptionally(throwable);
+        return future;
     }
 }

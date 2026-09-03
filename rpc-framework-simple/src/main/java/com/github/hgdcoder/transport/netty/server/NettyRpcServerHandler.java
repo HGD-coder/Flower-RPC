@@ -1,11 +1,11 @@
 package com.github.hgdcoder.transport.netty.server;
 
-import com.github.hgdcoder.enums.RpcResponseCodeEnum;
 import com.github.hgdcoder.remoting.constants.RpcConstants;
 import com.github.hgdcoder.remoting.dto.RpcMessage;
 import com.github.hgdcoder.remoting.dto.RpcRequest;
 import com.github.hgdcoder.remoting.dto.RpcResponse;
 import com.github.hgdcoder.remoting.handler.RpcRequestHandler;
+import com.github.hgdcoder.remoting.handler.RpcResponseFactory;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
@@ -47,10 +47,9 @@ public class NettyRpcServerHandler extends SimpleChannelInboundHandler<RpcMessag
                     request.getRequestId()
             );
         }catch(RuntimeException e){
-            response = RpcResponse.fail(
-                    RpcResponseCodeEnum.FAIL,
+            response = RpcResponseFactory.failure(
                     request.getRequestId(),
-                    e.getMessage()
+                    e
             );
         }
 

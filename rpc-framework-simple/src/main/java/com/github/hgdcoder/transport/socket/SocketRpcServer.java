@@ -1,6 +1,5 @@
 package com.github.hgdcoder.transport.socket;
 
-import com.github.hgdcoder.enums.RpcResponseCodeEnum;
 import com.github.hgdcoder.provider.ServiceProvider;
 import com.github.hgdcoder.remoting.codec.RpcMessageCodec;
 import com.github.hgdcoder.remoting.constants.RpcConstants;
@@ -8,7 +7,7 @@ import com.github.hgdcoder.remoting.dto.RpcMessage;
 import com.github.hgdcoder.remoting.dto.RpcRequest;
 import com.github.hgdcoder.remoting.dto.RpcResponse;
 import com.github.hgdcoder.remoting.handler.RpcRequestHandler;
-import com.github.hgdcoder.serialize.jdk.JdkSerializer;
+import com.github.hgdcoder.remoting.handler.RpcResponseFactory;
 
 import java.io.*;
 import java.net.InetSocketAddress;
@@ -113,10 +112,9 @@ public class SocketRpcServer {
             Object result = handler.handle(request);
             return RpcResponse.success(result, request.getRequestId());
         } catch (Exception e) {
-            return RpcResponse.fail(
-                    RpcResponseCodeEnum.FAIL,
+            return RpcResponseFactory.failure(
                     request.getRequestId(),
-                    e.getMessage()
+                    e
             );
         }
     }
