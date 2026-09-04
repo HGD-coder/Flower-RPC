@@ -37,17 +37,10 @@ public class ZkServiceRegistry implements ServiceRegistry {
             String rpcServiceName,
             InetSocketAddress inetSocketAddress
     ) {
-        // 服务地址作为服务节点的名称，例如 127.0.0.1:9998。
-        String serviceAddress = inetSocketAddress.getHostString()
-                + ":"
-                + inetSocketAddress.getPort();
-
-        // 最终路径结构：/flower-rpc/完整服务名/服务地址。
-        String servicePath = CuratorUtils.ZK_REGISTER_ROOT_PATH
-                + "/"
-                + rpcServiceName
-                + "/"
-                + serviceAddress;
+        String servicePath = buildServicePath(
+                rpcServiceName,
+                inetSocketAddress
+        );
 
         // 复用当前 JVM 的 Curator 客户端，并注册临时服务节点。
         CuratorFramework zkClient = CuratorUtils.getZkClient();
@@ -59,5 +52,36 @@ public class ZkServiceRegistry implements ServiceRegistry {
             throw new IllegalArgumentException("config must not be null");
         }
         return config;
+    }
+
+    @Override
+    public void unregisterService(
+            String rpcServiceName,
+            InetSocketAddress inetSocketAddress
+    ) {
+        String servicePath = buildServicePath(
+                rpcServiceName,
+                inetSocketAddress
+        );
+
+        CuratorUtils.closeEphemeralNode(servicePath);
+    }
+
+    /** 统一构造注册和注销使用的 ZooKeeper 路径。 */
+    private String buildServicePath(
+            String rpcServiceName,
+            InetSocketAddress address
+    ) {
+        // 服务地址作为服务节点的名称，例如 127.0.0.1:9998。
+        String serviceAddress = address.getHostString()
+                + ":"
+                + address.getPort();
+
+        // 最终路径结构：/flower-rpc/完整服务名/服务地址。
+        return CuratorUtils.ZK_REGISTER_ROOT_PATH
+                + "/"
+                + rpcServiceName
+                + "/"
+                + serviceAddress;
     }
 }

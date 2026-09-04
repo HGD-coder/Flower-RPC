@@ -28,7 +28,7 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p>客户端方向：扫描 {@code @RpcReference} 字段 -> 创建 {@link RpcClientProxy} ->
  * 生成接口代理对象 -> 反射写入字段。服务端方向：记录 {@code @RpcService} 元数据 ->
- * 等 Bean 初始化完成 -> 调用 {@link ServiceProvider#publishService(RpcServiceConfig)}。</p>
+ * 等 Bean 初始化完成 -> 调用 {@link ServiceProvider#addService(RpcServiceConfig)}。</p>
  */
 public class SpringBeanPostProcessor implements BeanPostProcessor {
     /**
@@ -98,7 +98,9 @@ public class SpringBeanPostProcessor implements BeanPostProcessor {
     }
 
     /**
-     * Spring 在 Bean 完成初始化后调用。若该 Bean 是 RPC 服务，则在这里正式发布。
+     *  Spring 在 Bean 完成初始化后调用。
+     *  若该 Bean 是 RPC 服务，则将它加入本地服务容器。
+     *  对注册中心的正式发布，由 Netty 启动成功后执行。
      *
      * @param bean 已完成初始化的 Bean；它可能是其他后处理器生成的最终代理对象
      * @param beanName Bean 在容器中的名称，也是查找暂存服务元数据的键
@@ -132,11 +134,22 @@ public class SpringBeanPostProcessor implements BeanPostProcessor {
                 .version(metadata.version)
                 .build();
         try {
-            // 继续复用手动 API 的 publishService，服务键、注册中心和本地服务表语义保持不变。
-            serviceProvider.publishService(serviceConfig);
+            /*
+             * Bean 初始化成功，只代表业务对象准备好了，
+             * 不代表 Netty 已经成功绑定端口。
+             *
+             * 此时只加入本地服务容器，不访问注册中心。
+             * 等 Netty 绑定成功后，再统一发布这些服务。
+             */
+            serviceProvider.addService(serviceConfig);
         } catch (RuntimeException e) {
-            throw serviceFailure(beanName, metadata.beanClassName,
-                    "failed to publish RPC service", e);
+            // 本地登记失败时，让 Spring 启动失败，并保留原因
+            throw serviceFailure(
+                    beanName,
+                    metadata.beanClassName,
+                    "failed to add local RPC service",
+                    e
+            );
         }
         return bean;
     }

@@ -242,6 +242,34 @@ public final class CuratorUtils {
     }
 
     /**
+     * 停止维护并删除一个由当前 JVM 发布的临时节点。
+     *
+     * 这里只关闭对应的 PersistentNode，不关闭共享 Curator 客户端，
+     * 因为其他服务注册和客户端监听可能仍然需要使用该客户端。
+     */
+    public static synchronized void closeEphemeralNode(String path) {
+        PersistentNode node = REGISTERED_NODE_CACHE.remove(path);
+
+        // 缓存中不存在，说明它没有注册或已经注销。
+        if (node == null) {
+            return;
+        }
+
+        try {
+            // 停止自动维护，同时删除对应的 ZooKeeper 临时节点。
+            node.close();
+        } catch (Exception e) {
+            // 关闭失败时放回缓存，允许后续再次尝试注销。
+            REGISTERED_NODE_CACHE.putIfAbsent(path, node);
+
+            throw new RuntimeException(
+                    "Close ZooKeeper node failed: " + path,
+                    e
+            );
+        }
+    }
+
+    /**
      * 从本地缓存中获取某个服务的全部提供者地址。
      *
      * 第一次查询时会读取 ZooKeeper 并创建监听器；后续 RPC 调用直接读取本地缓存，

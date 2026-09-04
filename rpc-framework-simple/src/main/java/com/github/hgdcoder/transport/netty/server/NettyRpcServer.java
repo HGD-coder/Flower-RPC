@@ -32,6 +32,15 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class NettyRpcServer implements AutoCloseable {
     private static final int SERVER_BACKLOG = 1024;
 
+    /** 配置中的服务端主机地址，同时用于监听和发布。 */
+    private final String serverHost;
+
+    /**
+     * 当前服务端进入发布阶段时使用的地址。
+     * 关闭时使用同一个地址注销，包括清理部分发布失败的情况。
+     */
+    private volatile InetSocketAddress publishedAddress;
+
     // 构造时指定的监听端口；0表示由操作系统选择空闲端口
     private final int port;
 
@@ -55,6 +64,7 @@ public final class NettyRpcServer implements AutoCloseable {
     // 绑定成功后可见的监听 Channel，volatile 让 getPort 可读取实际分配的端口。
     private volatile Channel serverChannel;
 
+
     public NettyRpcServer(
             RpcFrameworkConfig config,
             ServiceProvider serviceProvider
@@ -71,6 +81,7 @@ public final class NettyRpcServer implements AutoCloseable {
         }
 
         this.port = config.getServerPort();
+        this.serverHost = config.getServerHost();
         this.heartbeatTimeoutSeconds =
                 config.getHeartbeatTimeoutSeconds();
         this.serviceProvider = serviceProvider;
@@ -166,10 +177,42 @@ public final class NettyRpcServer implements AutoCloseable {
                 });
 
         try{
-            serverChannel = bootstrap.bind(port).syncUninterruptibly().channel();
-        }catch(RuntimeException e) {
-            close();
-            throw new RuntimeException("Netty RPC server bind failed:" + port, e);
+            /*
+             * 同步等待端口绑定成功。
+             * serverHost 指定监听地址，port 指定监听端口。
+             */
+            serverChannel = bootstrap.bind(serverHost, port)
+                    .syncUninterruptibly()
+                    .channel();
+
+            /*
+             * 配置端口可能为 0，表示让操作系统分配空闲端口。
+             * 因此发布时必须使用 getPort() 返回的实际端口。
+             */
+            InetSocketAddress address =
+                    new InetSocketAddress(serverHost, getPort());
+
+            /*
+             * 发布前先保存地址。
+             * 即使发布中途失败，close() 仍然知道要清理哪个地址。
+             */
+            publishedAddress = address;
+
+            // 此时监听端口已经就绪，才允许客户端发现这些服务。
+            serviceProvider.publishAllServices(address);
+        }catch(RuntimeException startFailure) {
+            try{
+                // 绑定失败或发布失败，都需要清理已经创建的资源。
+                close();
+            }catch (RuntimeException cleanupFailure){
+                // 保留启动失败作为主要原因，附加清理阶段的异常。
+                startFailure.addSuppressed(cleanupFailure);
+            }
+
+            throw new RuntimeException(
+                    "Netty RPC server start failed: " + port,
+                    startFailure
+            );
         }
     }
 
@@ -192,19 +235,54 @@ public final class NettyRpcServer implements AutoCloseable {
      */
     @Override
     public synchronized void close() {
+        // 只有第一次关闭负责执行清理，避免重复释放。
         if(!closed.compareAndSet(false,true)){
             return;
         }
-        Channel channel = serverChannel;
-        if(channel != null) {
-            channel.close().syncUninterruptibly();
+
+        RuntimeException closeFailure = null;
+
+        try {
+            Channel channel = serverChannel;
+            if (channel != null) {
+                // 关闭监听 Channel，停止接受新连接。
+                channel.close().syncUninterruptibly();
+            }
+        } catch (RuntimeException e) {
+            // 先记录异常，继续执行后续清理。
+            closeFailure = e;
         }
+
+        InetSocketAddress address = publishedAddress;
+        if (address != null) {
+            try {
+                // 从注册中心删除当前服务端发布的服务地址。
+                serviceProvider.unpublishAllServices(address);
+
+                // 全部注销成功后，清空服务端记录的发布地址。
+                publishedAddress = null;
+            } catch (RuntimeException e) {
+                // 注销失败不能阻止 Netty 线程资源的释放。
+                if (closeFailure == null) {
+                    closeFailure = e;
+                } else {
+                    closeFailure.addSuppressed(e);
+                }
+            }
+        }
+
+        // 先关闭业务执行器，随后关闭连接 I/O 和接入线程组。
         businessGroup.shutdownGracefully(0,5, TimeUnit.SECONDS)
                 .syncUninterruptibly();
         workerGroup.shutdownGracefully(0,5, TimeUnit.SECONDS)
                 .syncUninterruptibly();
         bossGroup.shutdownGracefully(0,5, TimeUnit.SECONDS)
                 .syncUninterruptibly();
+
+        // 完成后续清理后，再把前面记录的异常交给调用方。
+        if (closeFailure != null) {
+            throw closeFailure;
+        }
     }
 
 }

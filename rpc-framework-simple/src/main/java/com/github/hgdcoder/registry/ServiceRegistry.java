@@ -11,5 +11,14 @@ public interface ServiceRegistry {
      * @param rpcServiceName 完整的服务名称（class name+group+version）
      * @param inetSocketAddress 远程服务地址
      */
-    void registerService(String rpcServiceName, InetSocketAddress inetSocketAddress);
+    void registerService(
+            String rpcServiceName,
+            InetSocketAddress inetSocketAddress
+    );
+
+    /** 从注册中心删除指定服务地址。 */
+    void unregisterService(
+            String rpcServiceName,
+            InetSocketAddress inetSocketAddress
+    );
 }
