@@ -8,6 +8,8 @@ import com.github.hgdcoder.remoting.dto.RpcRequest;
 import com.github.hgdcoder.remoting.dto.RpcResponse;
 import com.github.hgdcoder.remoting.handler.RpcRequestHandler;
 import com.github.hgdcoder.remoting.handler.RpcResponseFactory;
+import com.github.hgdcoder.utils.concurrent.threadpool.CustomThreadPoolConfig;
+import com.github.hgdcoder.utils.concurrent.threadpool.ThreadPoolFactoryUtil;
 
 import java.io.*;
 import java.net.InetSocketAddress;
@@ -15,7 +17,6 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
-import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -34,14 +35,8 @@ public class SocketRpcServer {
     private final ServiceProvider serviceProvider;
     private final RpcMessageCodec messageCodec = new RpcMessageCodec();
 
-    private final ExecutorService threadPool = new ThreadPoolExecutor(
-            8,
-            32,
-            60L,
-            TimeUnit.SECONDS,
-            new ArrayBlockingQueue<>(1024),
-            new ThreadPoolExecutor.CallerRunsPolicy()
-    );
+    /** 每个任务负责一条 BIO 连接，队列满时让 accept 线程处理以减缓继续接入。 */
+    private final ExecutorService threadPool = createConnectionPool();
 
     public SocketRpcServer(int port, ServiceProvider serviceProvider) {
         this.port = port;
@@ -129,5 +124,26 @@ public class SocketRpcServer {
         } catch (Exception ignored) {
             // 连接退出时尽力释放资源即可。
         }
+    }
+
+    private static ExecutorService createConnectionPool() {
+        CustomThreadPoolConfig config = CustomThreadPoolConfig.builder()
+                .corePoolSize(8)
+                .maximumPoolSize(32)
+                .keepAliveTime(60L)
+                .timeUnit(TimeUnit.SECONDS)
+                .queueCapacity(1024)
+                .build();
+
+        /*
+         * CallerRunsPolicy 不丢弃连接：线程池饱和后由调用 execute 的 accept 线程
+         * 自己处理当前连接。accept 暂停期间不会继续高速接入，这就是一种背压。
+         */
+        return ThreadPoolFactoryUtil.createThreadPool(
+                config,
+                "flower-rpc-bio-server",
+                false,
+                new ThreadPoolExecutor.CallerRunsPolicy()
+        );
     }
 }

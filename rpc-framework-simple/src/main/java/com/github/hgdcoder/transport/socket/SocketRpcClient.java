@@ -1,15 +1,19 @@
 package com.github.hgdcoder.transport.socket;
 
+import com.github.hgdcoder.enums.RpcStatusCode;
+import com.github.hgdcoder.exception.RpcException;
 import com.github.hgdcoder.registry.ServiceDiscovery;
 import com.github.hgdcoder.remoting.dto.RpcRequest;
 import com.github.hgdcoder.remoting.dto.RpcResponse;
 import com.github.hgdcoder.transport.RpcRequestTransport;
+import com.github.hgdcoder.utils.RuntimeUtil;
+import com.github.hgdcoder.utils.concurrent.threadpool.CustomThreadPoolConfig;
+import com.github.hgdcoder.utils.concurrent.threadpool.ThreadPoolFactoryUtil;
 
 import java.net.InetSocketAddress;
 import java.util.Set;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * 基于阻塞 Socket 的 RPC 客户端。
@@ -50,13 +54,35 @@ public class SocketRpcClient implements RpcRequestTransport,AutoCloseable {
      * new SocketRpcClient(new FileServiceDiscovery())
      */
     public SocketRpcClient(ServiceDiscovery serviceDiscovery) {
+        this(serviceDiscovery, defaultIoPoolConfig());
+    }
+
+    /** 包内构造器允许测试使用极小队列，稳定触发背压。 */
+    SocketRpcClient(
+            ServiceDiscovery serviceDiscovery,
+            CustomThreadPoolConfig poolConfig
+    ) {
         if (serviceDiscovery == null) {
             throw new IllegalArgumentException("serviceDiscovery must not be null");
         }
         this.serviceDiscovery = serviceDiscovery;
-        this.ioExecutor = Executors.newFixedThreadPool(
-                Math.max(2, Runtime.getRuntime().availableProcessors()),
-                new SocketIoThreadFactory()
+
+        ThreadFactory namedFactory = ThreadPoolFactoryUtil.createThreadFactory(
+                "flower-rpc-bio-client",
+                true
+        );
+        // 工作线程退出时，关闭该线程 ThreadLocal 中持有的全部 Socket。
+        ThreadFactory cleanupFactory = worker -> namedFactory.newThread(() -> {
+            try {
+                worker.run();
+            } finally {
+                connectionProvider.closeCurrentThreadConnection();
+            }
+        });
+        this.ioExecutor = ThreadPoolFactoryUtil.createThreadPool(
+                poolConfig,
+                cleanupFactory,
+                new ThreadPoolExecutor.AbortPolicy()
         );
     }
 
@@ -82,7 +108,13 @@ public class SocketRpcClient implements RpcRequestTransport,AutoCloseable {
         try {
             ioExecutor.execute(() -> sendBlocking(rpcRequest, resultFuture));
         } catch (RejectedExecutionException e) {
-            resultFuture.completeExceptionally(e);
+            // 有界队列已满：快速失败，不能继续堆积请求直至内存耗尽。
+            resultFuture.completeExceptionally(new RpcException(
+                    RpcStatusCode.RESOURCE_EXHAUSTED,
+                    rpcRequest == null ? null : rpcRequest.getRequestId(),
+                    "BIO client request queue is full",
+                    e
+            ));
         }
         return resultFuture;
     }
@@ -168,7 +200,11 @@ public class SocketRpcClient implements RpcRequestTransport,AutoCloseable {
             for (CompletableFuture<RpcResponse<Object>> request : activeRequests) {
                 request.completeExceptionally(cause);
             }
-            ioExecutor.shutdownNow();
+            ThreadPoolFactoryUtil.shutdownGracefully(
+                    ioExecutor,
+                    5,
+                    TimeUnit.SECONDS
+            );
         }
     }
 
@@ -179,21 +215,17 @@ public class SocketRpcClient implements RpcRequestTransport,AutoCloseable {
         return future;
     }
 
-    /** 创建守护线程，并保证线程结束时释放它私有的地址级连接缓存。 */
-    private final class SocketIoThreadFactory implements ThreadFactory {
-        private final AtomicInteger sequence = new AtomicInteger();
-
-        @Override
-        public Thread newThread(Runnable worker) {
-            Thread thread = new Thread(() -> {
-                try {
-                    worker.run();
-                } finally {
-                    connectionProvider.closeCurrentThreadConnection();
-                }
-            }, "flower-rpc-bio-client-" + sequence.incrementAndGet());
-            thread.setDaemon(true);
-            return thread;
-        }
+    /** 根据 CPU 数量生成 BIO 客户端的默认线程池配置。 */
+    private static CustomThreadPoolConfig defaultIoPoolConfig() {
+        int cpus = RuntimeUtil.cpus();
+        int corePoolSize = Math.max(2, Math.min(4, cpus));
+        int maximumPoolSize = Math.max(corePoolSize, cpus * 2);
+        return CustomThreadPoolConfig.builder()
+                .corePoolSize(corePoolSize)
+                .maximumPoolSize(maximumPoolSize)
+                .keepAliveTime(60L)
+                .timeUnit(TimeUnit.SECONDS)
+                .queueCapacity(256)
+                .build();
     }
 }

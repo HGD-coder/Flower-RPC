@@ -8,6 +8,7 @@ import com.github.hgdcoder.remoting.codec.NettyRpcMessageEncoder;
 import com.github.hgdcoder.remoting.constants.RpcConstants;
 import com.github.hgdcoder.remoting.handler.RpcRequestHandler;
 import com.github.hgdcoder.transport.netty.handler.NettyRpcHeartbeatHandler;
+import com.github.hgdcoder.utils.concurrent.threadpool.ThreadPoolFactoryUtil;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelInitializer;
@@ -82,6 +83,10 @@ public final class NettyRpcServer implements AutoCloseable {
                         Math.max(
                                 2,
                                 Runtime.getRuntime().availableProcessors()
+                        ),
+                        ThreadPoolFactoryUtil.createThreadFactory(
+                                "flower-rpc-netty-business",
+                                false
                         )
                 );
     }
