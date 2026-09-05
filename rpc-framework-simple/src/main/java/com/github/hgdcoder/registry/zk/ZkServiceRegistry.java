@@ -42,8 +42,11 @@ public class ZkServiceRegistry implements ServiceRegistry {
                 inetSocketAddress
         );
 
-        // 复用当前 JVM 的 Curator 客户端，并注册临时服务节点。
-        CuratorFramework zkClient = CuratorUtils.getZkClient();
+        /*
+         * 使用构造 ZkServiceRegistry 时保存的 ZooKeeper 地址，
+         * 保证注册中心和其他组件观察到同一份启动配置。
+         */
+        CuratorFramework zkClient = CuratorUtils.getZkClient(zkAddress);
         CuratorUtils.createEphemeralNode(zkClient, servicePath);
     }
 

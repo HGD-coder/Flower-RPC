@@ -1,5 +1,6 @@
 package com.github.hgdcoder.registry.file;
 
+import com.github.hgdcoder.config.RpcFrameworkConfig;
 import com.github.hgdcoder.registry.ServiceRegistry;
 
 import java.io.IOException;
@@ -13,6 +14,40 @@ import java.util.List;
 import java.util.Properties;
 
 public class FileServiceRegistry implements ServiceRegistry {
+
+    /**
+     * 保留统一装配传入的配置快照。
+     *
+     * <p>当前文件注册中心没有专属配置项，
+     * 但后续增加注册文件路径等配置时，可以直接使用它。</p>
+     */
+    private final RpcFrameworkConfig config;
+
+    /**
+     * 兼容原有无参创建方式。
+     */
+    public FileServiceRegistry() {
+        this(RpcFrameworkConfig.defaults());
+    }
+
+    /**
+     * RpcExtensionFactory 使用的统一构造器。
+     *
+     * <p>所有 ServiceRegistry 实现都提供接收
+     * RpcFrameworkConfig 的 public 构造器。</p>
+     */
+    public FileServiceRegistry(
+            RpcFrameworkConfig config
+    ) {
+        if (config == null) {
+            throw new IllegalArgumentException(
+                    "config must not be null"
+            );
+        }
+
+        this.config = config;
+    }
+
     @Override
     public synchronized void registerService(String rpcServiceName, InetSocketAddress address) {
         try {

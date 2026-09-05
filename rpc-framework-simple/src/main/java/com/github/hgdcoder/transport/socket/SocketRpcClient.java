@@ -1,5 +1,6 @@
 package com.github.hgdcoder.transport.socket;
 
+import com.github.hgdcoder.config.RpcFrameworkConfig;
 import com.github.hgdcoder.enums.RpcStatusCode;
 import com.github.hgdcoder.exception.RpcException;
 import com.github.hgdcoder.registry.ServiceDiscovery;
@@ -22,8 +23,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * 从“每个线程只有一条连接”改为“每个线程、每个服务地址一条连接”。
  */
 public class SocketRpcClient implements RpcRequestTransport,AutoCloseable {
-    private static final int DEFAULT_CONNECT_TIMEOUT_MILLIS = 3000;
-    private static final int DEFAULT_READ_TIMEOUT_MILLIS = 5000;
 
     /**
      * 根据 rpcServiceName 从 ZooKeeper 地址缓存中发现服务，
@@ -43,6 +42,21 @@ public class SocketRpcClient implements RpcRequestTransport,AutoCloseable {
      */
     private final ExecutorService ioExecutor;
 
+    /**
+     * 建立 Socket 连接的超时时间。
+     *
+     * <p>来自创建客户端时传入的配置快照。</p>
+     */
+    private final int connectTimeoutMillis;
+
+    /**
+     * 等待 RPC 响应的 Socket 读取超时时间。
+     *
+     * <p>超过该时间仍未收到响应时，
+     * Socket 的读取操作会抛出 SocketTimeoutException。</p>
+     */
+    private final int requestTimeoutMillis;
+
     private final AtomicBoolean closed = new AtomicBoolean();
 
     /** close 时用于唤醒尚未完成的 BIO 调用，包括仍在队列中的任务。 */
@@ -50,40 +64,113 @@ public class SocketRpcClient implements RpcRequestTransport,AutoCloseable {
             ConcurrentHashMap.newKeySet();
 
     /**
-     * V4 usage:
-     * new SocketRpcClient(new FileServiceDiscovery())
+     * 兼容之前直接传入 ServiceDiscovery 的写法。
+     *
+     * <p>没有显式提供配置时，使用框架默认配置。</p>
      */
-    public SocketRpcClient(ServiceDiscovery serviceDiscovery) {
-        this(serviceDiscovery, defaultIoPoolConfig());
+    public SocketRpcClient(
+            ServiceDiscovery serviceDiscovery
+    ) {
+        this(
+                serviceDiscovery,
+                RpcFrameworkConfig.defaults()
+        );
     }
 
-    /** 包内构造器允许测试使用极小队列，稳定触发背压。 */
+    /**
+     * RpcExtensionFactory 使用的统一 public 构造器。
+     *
+     * <p>它的参数签名必须与工厂传给 newExtension()
+     * 的 parameterTypes 完全一致。</p>
+     */
+    public SocketRpcClient(
+            ServiceDiscovery serviceDiscovery,
+            RpcFrameworkConfig config
+    ) {
+        this(
+                serviceDiscovery,
+                config,
+                defaultIoPoolConfig()
+        );
+    }
+
+    /**
+     * 测试专用构造器。
+     *
+     * <p>测试可以传入容量非常小的线程池配置，
+     * 从而稳定地制造队列满和背压场景。</p>
+     */
     SocketRpcClient(
             ServiceDiscovery serviceDiscovery,
             CustomThreadPoolConfig poolConfig
     ) {
+        this(
+                serviceDiscovery,
+                RpcFrameworkConfig.defaults(),
+                poolConfig
+        );
+    }
+
+    /**
+     * 所有构造入口最终汇聚到这里。
+     */
+    private SocketRpcClient(
+            ServiceDiscovery serviceDiscovery,
+            RpcFrameworkConfig config,
+            CustomThreadPoolConfig poolConfig
+    ) {
         if (serviceDiscovery == null) {
-            throw new IllegalArgumentException("serviceDiscovery must not be null");
+            throw new IllegalArgumentException(
+                    "serviceDiscovery must not be null"
+            );
         }
+
+        if (config == null) {
+            throw new IllegalArgumentException(
+                    "config must not be null"
+            );
+        }
+
         this.serviceDiscovery = serviceDiscovery;
 
-        ThreadFactory namedFactory = ThreadPoolFactoryUtil.createThreadFactory(
-                "flower-rpc-bio-client",
-                true
-        );
-        // 工作线程退出时，关闭该线程 ThreadLocal 中持有的全部 Socket。
-        ThreadFactory cleanupFactory = worker -> namedFactory.newThread(() -> {
-            try {
-                worker.run();
-            } finally {
-                connectionProvider.closeCurrentThreadConnection();
-            }
-        });
-        this.ioExecutor = ThreadPoolFactoryUtil.createThreadPool(
-                poolConfig,
-                cleanupFactory,
-                new ThreadPoolExecutor.AbortPolicy()
-        );
+        /*
+         * 保存配置值。
+         *
+         * 后续每次创建 SocketConnection 时使用这两个值，
+         * 不再使用类中写死的超时常量。
+         */
+        this.connectTimeoutMillis =
+                config.getConnectTimeoutMillis();
+
+        this.requestTimeoutMillis =
+                config.getRequestTimeoutMillis();
+
+        ThreadFactory namedFactory =
+                ThreadPoolFactoryUtil.createThreadFactory(
+                        "flower-rpc-bio-client",
+                        true
+                );
+
+        /*
+         * 每个 BIO 工作线程退出时，
+         * 清理该线程 ThreadLocal 中保存的 Socket。
+         */
+        ThreadFactory cleanupFactory =
+                worker -> namedFactory.newThread(() -> {
+                    try {
+                        worker.run();
+                    } finally {
+                        connectionProvider
+                                .closeCurrentThreadConnection();
+                    }
+                });
+
+        this.ioExecutor =
+                ThreadPoolFactoryUtil.createThreadPool(
+                        poolConfig,
+                        cleanupFactory,
+                        new ThreadPoolExecutor.AbortPolicy()
+                );
     }
 
     /**
@@ -153,10 +240,16 @@ public class SocketRpcClient implements RpcRequestTransport,AutoCloseable {
             return connection;
         }
 
+        /*
+         * 第一次访问该地址时创建连接。
+         *
+         * connectTimeoutMillis 控制建立 TCP 连接的等待时间。
+         * requestTimeoutMillis 控制读取 RPC 响应的等待时间。
+         */
         connection = new SocketConnection(
                 address,
-                DEFAULT_CONNECT_TIMEOUT_MILLIS,
-                DEFAULT_READ_TIMEOUT_MILLIS
+                connectTimeoutMillis,
+                requestTimeoutMillis
         );
 
         connectionProvider.set(address, connection);

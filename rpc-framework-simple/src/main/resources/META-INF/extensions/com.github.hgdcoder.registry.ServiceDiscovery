@@ -1,0 +1,4 @@
+# Flower-RPC 服务发现 SPI 映射。
+
+zk=com.github.hgdcoder.registry.zk.ZkServiceDiscovery
+file=com.github.hgdcoder.registry.file.FileServiceDiscovery

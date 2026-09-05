@@ -1,6 +1,9 @@
 package com.github.hgdcoder.config;
 
+import com.github.hgdcoder.enums.RpcRequestTransportEnum;
 import com.github.hgdcoder.enums.SerializationTypeEnum;
+import com.github.hgdcoder.enums.ServiceDiscoveryEnum;
+import com.github.hgdcoder.enums.ServiceRegistryEnum;
 import com.github.hgdcoder.remoting.constants.RpcConstants;
 import lombok.Getter;
 
@@ -40,6 +43,21 @@ public final class RpcFrameworkConfig {
     public static final String COMPRESS_GZIP = "gzip";
 
     /**
+     * 三个内置 SPI 实现的默认名称。
+     *
+     * <p>这里使用枚举保存框架内置名称，但配置仍然允许填写
+     * 第三方扩展名，例如 nacos、http、quic。</p>
+     */
+    public static final String REGISTRY_ZK =
+            ServiceRegistryEnum.ZK.getName();
+
+    public static final String DISCOVERY_ZK =
+            ServiceDiscoveryEnum.ZK.getName();
+
+    public static final String TRANSPORT_NETTY =
+            RpcRequestTransportEnum.NETTY.getName();
+
+    /**
      * ZooKeeper 地址，例如 127.0.0.1:2181。
      */
     private final String zkAddress;
@@ -68,6 +86,27 @@ public final class RpcFrameworkConfig {
      * 便于人阅读和配置的压缩算法名称。
      */
     private final String compress;
+
+    /**
+     * 服务注册实现的 SPI 名称。
+     *
+     * <p>例如：zk、file。</p>
+     */
+    private final String registry;
+
+    /**
+     * 服务发现实现的 SPI 名称。
+     *
+     * <p>例如：zk、file。</p>
+     */
+    private final String discovery;
+
+    /**
+     * 客户端传输实现的 SPI 名称。
+     *
+     * <p>例如：netty、socket。</p>
+     */
+    private final String transport;
 
     /**
      * 写入 RPC 协议头的序列化器编号。
@@ -142,6 +181,27 @@ public final class RpcFrameworkConfig {
                 builder.compress,
                 COMPRESS_NONE,
                 COMPRESS_GZIP
+        );
+
+        /*
+         * SPI 扩展名只做格式标准化，不限制可选值。
+         *
+         * 如果这里使用 normalizeChoice() 写死 zk、file，
+         * 第三方新增 nacos 时就必须修改框架代码，不符合 SPI 的目的。
+         */
+        this.registry = normalizeExtensionName(
+                RpcConfigLoader.REGISTRY_KEY,
+                builder.registry
+        );
+
+        this.discovery = normalizeExtensionName(
+                RpcConfigLoader.DISCOVERY_KEY,
+                builder.discovery
+        );
+
+        this.transport = normalizeExtensionName(
+                RpcConfigLoader.TRANSPORT_KEY,
+                builder.transport
         );
 
 
@@ -287,6 +347,26 @@ public final class RpcFrameworkConfig {
     }
 
     /**
+     * 标准化 SPI 扩展名称。
+     *
+     * <p>只要求名称非空，并转换成小写，不设置实现白名单。</p>
+     *
+     * <p>例如：</p>
+     * <pre>
+     * " ZK "    -> "zk"
+     * " Netty " -> "netty"
+     * " Nacos " -> "nacos"
+     * </pre>
+     */
+    private static String normalizeExtensionName(
+            String key,
+            String rawValue
+    ) {
+        return requireText(key, rawValue)
+                .toLowerCase(Locale.ROOT);
+    }
+
+    /**
      * 校验整数必须大于 0。
      */
     private static int requirePositive(String key, int value) {
@@ -415,6 +495,14 @@ public final class RpcFrameworkConfig {
         private String loadBalance = LOAD_BALANCE_CONSISTENT_HASH;
         private String serializer = SERIALIZER_KRYO;
         private String compress = defaultCompressName();
+
+        /*
+         * 默认使用 ZooKeeper 注册、ZooKeeper 发现和 Netty 传输。
+         */
+        private String registry = REGISTRY_ZK;
+        private String discovery = DISCOVERY_ZK;
+        private String transport = TRANSPORT_NETTY;
+
         private int connectTimeoutMillis = 3000;
         private int requestTimeoutMillis = 5000;
         private int heartbeatIntervalSeconds = 5;
@@ -433,6 +521,15 @@ public final class RpcFrameworkConfig {
             this.loadBalance = config.loadBalance;
             this.serializer = config.serializer;
             this.compress = config.compress;
+
+            /*
+             * toBuilder() 也必须复制三个 SPI 选择，
+             * 否则复制配置后会意外恢复成默认实现。
+             */
+            this.registry = config.registry;
+            this.discovery = config.discovery;
+            this.transport = config.transport;
+
             this.connectTimeoutMillis =
                     config.connectTimeoutMillis;
             this.requestTimeoutMillis =
@@ -470,6 +567,30 @@ public final class RpcFrameworkConfig {
 
         public Builder compress(String compress) {
             this.compress = compress;
+            return this;
+        }
+
+        /**
+         * 选择服务注册 SPI 实现。
+         */
+        public Builder registry(String registry) {
+            this.registry = registry;
+            return this;
+        }
+
+        /**
+         * 选择服务发现 SPI 实现。
+         */
+        public Builder discovery(String discovery) {
+            this.discovery = discovery;
+            return this;
+        }
+
+        /**
+         * 选择客户端传输 SPI 实现。
+         */
+        public Builder transport(String transport) {
+            this.transport = transport;
             return this;
         }
 

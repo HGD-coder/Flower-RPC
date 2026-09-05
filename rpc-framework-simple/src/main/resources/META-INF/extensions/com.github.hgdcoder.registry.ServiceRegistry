@@ -1,0 +1,4 @@
+# Flower-RPC 服务注册 SPI 映射。
+
+zk=com.github.hgdcoder.registry.zk.ZkServiceRegistry
+file=com.github.hgdcoder.registry.file.FileServiceRegistry

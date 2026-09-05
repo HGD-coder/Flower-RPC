@@ -56,7 +56,12 @@ public class ZkServiceDiscovery implements ServiceDiscovery {
     public InetSocketAddress lookupService(RpcRequest rpcRequest) {
         // 完整服务名由 interfaceName、group 和 version 组成。
         String rpcServiceName = rpcRequest.getRpcServiceName();
-        CuratorFramework zkClient = CuratorUtils.getZkClient();
+
+        /*
+         * 使用创建当前服务发现对象时保存的 ZooKeeper 地址，
+         * 不在每次查询服务时重新读取配置文件。
+         */
+        CuratorFramework zkClient = CuratorUtils.getZkClient(zkAddress);
 
         // CuratorUtils 第一次从 ZooKeeper 获取地址，后续优先使用监听器维护的本地缓存。
         List<String> serviceAddresses = CuratorUtils.getChildrenNodes(

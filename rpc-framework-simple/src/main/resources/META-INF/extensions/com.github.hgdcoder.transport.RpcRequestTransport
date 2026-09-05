@@ -1,0 +1,4 @@
+# Flower-RPC 客户端传输 SPI 映射。
+
+netty=com.github.hgdcoder.transport.netty.client.NettyRpcClient
+socket=com.github.hgdcoder.transport.socket.SocketRpcClient

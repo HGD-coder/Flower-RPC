@@ -21,6 +21,16 @@ public final class RpcConfigLoader {
     public static final String LOAD_BALANCE_KEY = "flower.rpc.load-balance";
     public static final String SERIALIZER_KEY = "flower.rpc.serializer";
     public static final String COMPRESS_KEY = "flower.rpc.compress";
+
+    /** 服务注册 SPI 实现名称。 */
+    public static final String REGISTRY_KEY = "flower.rpc.registry";
+
+    /** 服务发现 SPI 实现名称。 */
+    public static final String DISCOVERY_KEY = "flower.rpc.discovery";
+
+    /** 客户端传输 SPI 实现名称。 */
+    public static final String TRANSPORT_KEY = "flower.rpc.transport";
+
     public static final String CONNECT_TIMEOUT_MILLIS_KEY =
             "flower.rpc.connect-timeout-millis";
     public static final String REQUEST_TIMEOUT_MILLIS_KEY =
@@ -66,6 +76,21 @@ public final class RpcConfigLoader {
                         COMPRESS_KEY,
                         fileProperties,
                         defaults.getCompress()
+                ))
+                .registry(resolve(
+                        REGISTRY_KEY,
+                        fileProperties,
+                        defaults.getRegistry()
+                ))
+                .discovery(resolve(
+                        DISCOVERY_KEY,
+                        fileProperties,
+                        defaults.getDiscovery()
+                ))
+                .transport(resolve(
+                        TRANSPORT_KEY,
+                        fileProperties,
+                        defaults.getTransport()
                 ))
                 .connectTimeoutMillis(parseInt(
                         CONNECT_TIMEOUT_MILLIS_KEY,
