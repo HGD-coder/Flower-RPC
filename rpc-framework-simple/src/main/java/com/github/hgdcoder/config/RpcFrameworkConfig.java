@@ -63,9 +63,20 @@ public final class RpcFrameworkConfig {
     private final String zkAddress;
 
     /**
-     * RPC 服务端监听和注册到 ZooKeeper 的主机地址。
+     * RPC 服务端发布到注册中心、供客户端连接的地址。
+     * 写入 ZooKeeper，客户端会连接这个地址
+     * 例如：
+     * 192.168.1.10
+     * rpc-server.example.com
      */
     private final String serverHost;
+
+    /**
+     * RPC 服务端在当前机器上真正监听的地址。
+     * 传给 Netty 的 bind()，决定本机监听范围
+     * 默认使用 0.0.0.0，表示监听当前机器的全部 IPv4 网卡。
+     */
+    private final String bindHost;
 
     /**
      * RPC 服务端监听端口。
@@ -152,9 +163,21 @@ public final class RpcFrameworkConfig {
                 builder.zkAddress
         );
 
-        this.serverHost = requireText(
+        /*
+         * serverHost 会被注册给远程客户端，因此不能使用
+         * 0.0.0.0、:: 等只能用于本机监听的通配地址。
+         */
+        this.serverHost = requireAdvertisedHost(
                 RpcConfigLoader.SERVER_HOST_KEY,
                 builder.serverHost
+        );
+
+        /*
+         * bindHost 只在服务端本机使用，所以允许配置为 0.0.0.0。
+         */
+        this.bindHost = requireText(
+                RpcConfigLoader.SERVER_BIND_HOST_KEY,
+                builder.bindHost
         );
 
         /*
@@ -308,6 +331,49 @@ public final class RpcFrameworkConfig {
             );
         }
         return rawValue.trim();
+    }
+
+    /**
+     * 校验发布到注册中心的服务地址。
+     *
+     * 通配地址可以用来监听端口，但不能发布给客户端。
+     * 客户端无法通过 0.0.0.0 判断应该连接哪一台机器。
+     */
+    private static String requireAdvertisedHost(
+            String key,
+            String rawValue
+    ) {
+        String host = requireText(key, rawValue);
+
+        /*
+         * serverHost 最终会进入注册中心路径和服务地址，
+         * 因此不能包含路径分隔符或 NUL 字符。
+         */
+        if (host.indexOf('/') >= 0
+                || host.indexOf('\0') >= 0) {
+            throw invalidValue(
+                    key,
+                    rawValue,
+                    "advertised host must not contain '/' or NUL"
+            );
+        }
+
+        /*
+         * 以下地址表示“当前机器的所有网卡”，
+         * 只能用于监听，不能让远程客户端连接。
+         */
+        if ("0.0.0.0".equals(host)
+                || "::".equals(host)
+                || "0:0:0:0:0:0:0:0"
+                .equalsIgnoreCase(host)) {
+            throw invalidValue(
+                    key,
+                    rawValue,
+                    "advertised host must not be a wildcard address"
+            );
+        }
+
+        return host;
     }
 
     /**
@@ -490,7 +556,15 @@ public final class RpcFrameworkConfig {
          * 以下字段都是 Flower-RPC 的默认配置。
          */
         private String zkAddress = "127.0.0.1:2181";
+        /*
+         * 默认发布本机回环地址，适合单机学习。
+         */
         private String serverHost = "127.0.0.1";
+
+        /*
+         * 默认监听所有 IPv4 网卡。
+         */
+        private String bindHost = "0.0.0.0";
         private int serverPort = 9998;
         private String loadBalance = LOAD_BALANCE_CONSISTENT_HASH;
         private String serializer = SERIALIZER_KRYO;
@@ -517,6 +591,10 @@ public final class RpcFrameworkConfig {
         private Builder(RpcFrameworkConfig config) {
             this.zkAddress = config.zkAddress;
             this.serverHost = config.serverHost;
+
+            // toBuilder() 必须保留原配置的监听地址。
+            this.bindHost = config.bindHost;
+
             this.serverPort = config.serverPort;
             this.loadBalance = config.loadBalance;
             this.serializer = config.serializer;
@@ -547,6 +625,14 @@ public final class RpcFrameworkConfig {
 
         public Builder serverHost(String serverHost) {
             this.serverHost = serverHost;
+            return this;
+        }
+
+        /**
+         * 设置服务端在本机监听的地址。
+         */
+        public Builder bindHost(String bindHost) {
+            this.bindHost = bindHost;
             return this;
         }
 

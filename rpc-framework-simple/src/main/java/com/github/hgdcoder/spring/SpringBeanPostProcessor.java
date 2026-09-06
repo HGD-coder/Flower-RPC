@@ -80,11 +80,36 @@ public class SpringBeanPostProcessor implements BeanPostProcessor {
         // 使用 Spring 的合并注解查找，支持元注解、组合注解以及 @AliasFor 等注解模型。
         RpcService rpcService = AnnotatedElementUtils.findMergedAnnotation(beanClass, RpcService.class);
         if(rpcService != null) {
+            /*
+             * 在 Bean 可能被其他后处理器包装之前，
+             * 从用户编写的业务类中提取 RPC 服务接口。
+             */
+            Class<?>[] serviceInterfaces =
+                    ClassUtils.getAllInterfacesForClass(beanClass);
+
+            /*
+             * RPC 客户端依赖接口生成动态代理。
+             * 服务类没有实现接口时，直接终止 Spring 启动。
+             */
+            if (serviceInterfaces.length == 0) {
+                throw serviceFailure(
+                        beanName,
+                        beanClass.getName(),
+                        "@RpcService class must implement an interface",
+                        null
+                );
+            }
+
+
             // 此时只记录发布参数，不立刻发布。初始化方法执行失败的 Bean 不应该暴露给远程客户端。
             rpcServices.put(
                     beanName,
                     new RpcServiceMetadata(
                             beanClass.getName(),
+
+                            // 目前仍约定第一个接口是 RPC 服务接口。
+                            serviceInterfaces[0].getName(),
+
                             rpcService.group(),
                             rpcService.version()
                     )
@@ -129,7 +154,16 @@ public class SpringBeanPostProcessor implements BeanPostProcessor {
 
         // 把 Spring 管理的实例和注解里的 group/version 转换成框架原有的服务配置对象。
         RpcServiceConfig serviceConfig = RpcServiceConfig.builder()
+                /*
+                 * 保存 Spring 最终交回的 Bean。
+                 * 它有可能是经过 AOP 包装的代理对象。
+                 */
                 .service(bean)
+                /*
+                 * 接口名来自初始化前的用户类，
+                 * 不再依赖代理对象运行时暴露的接口顺序。
+                 */
+                .serviceName(metadata.serviceName)
                 .group(metadata.group)
                 .version(metadata.version)
                 .build();
@@ -316,14 +350,30 @@ public class SpringBeanPostProcessor implements BeanPostProcessor {
     }
 
     /**
-     * 描述一个 {@code @RpcService} Bean 发布所需的最小元数据。
-     * 类名、分组和版本共同用于区分同一接口的不同服务实例。
+     * 描述一个 @RpcService Bean 的发布元数据。
+     *
+     * 这些信息在 Bean 初始化前保存，
+     * 在 Bean 初始化成功后使用。
      */
     private static final class RpcServiceMetadata {
-        /** 服务实现 Bean 的用户类全限定名。 */
+        /**
+         * 用户编写的业务实现类名称。
+         *
+         * 主要用于生成清晰的异常信息。
+         */
         private final String beanClassName;
+
+        /**
+         * RPC 服务接口的全限定名。
+         *
+         * 例如：
+         * com.github.hgdcoder.HelloService
+         */
+        private final String serviceName;
+
         /** 服务分组，用于隔离同一服务的不同逻辑分区。 */
         private final String group;
+
         /** 服务版本，用于区分兼容演进中的不同服务实现。 */
         private final String version;
 
@@ -331,11 +381,18 @@ public class SpringBeanPostProcessor implements BeanPostProcessor {
          * 创建服务发布元数据。
          *
          * @param beanClassName 服务实现 Bean 的用户类全限定名
+         * @param serviceName
          * @param group 服务分组
          * @param version 服务版本
          */
-        private RpcServiceMetadata(String beanClassName, String group, String version) {
+        private RpcServiceMetadata(
+                String beanClassName,
+                String serviceName,
+                String group,
+                String version
+        ) {
             this.beanClassName = beanClassName;
+            this.serviceName = serviceName;
             this.group = group;
             this.version = version;
         }

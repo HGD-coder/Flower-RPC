@@ -15,10 +15,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class NettyRpcServerLifecycleTest {
 
     @Test
-    void shouldPublishActualAddressAndUnpublishItOnClose() {
+    void shouldBindToBindHostAndPublishServerHostSeparately() {
         RpcFrameworkConfig config = RpcFrameworkConfig.defaults()
                 .toBuilder()
-                .serverHost("127.0.0.1")
+                .serverHost("rpc.example.test")
+                .bindHost("127.0.0.1")
                 .serverPort(0)
                 .build();
         RecordingServiceProvider provider = new RecordingServiceProvider();
@@ -28,7 +29,7 @@ class NettyRpcServerLifecycleTest {
             server.start();
 
             assertNotNull(provider.publishedAddress);
-            assertEquals("127.0.0.1", provider.publishedAddress.getHostString());
+            assertEquals("rpc.example.test", provider.publishedAddress.getHostString());
             assertEquals(server.getPort(), provider.publishedAddress.getPort());
             assertTrue(provider.publishedAddress.getPort() > 0);
         } finally {

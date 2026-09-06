@@ -32,8 +32,19 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class NettyRpcServer implements AutoCloseable {
     private static final int SERVER_BACKLOG = 1024;
 
-    /** 配置中的服务端主机地址，同时用于监听和发布。 */
+    /**
+     * 对外发布地址。
+     *
+     * 这个地址会写入注册中心，客户端最终连接它。
+     */
     private final String serverHost;
+
+    /**
+     * Netty 在当前机器上真正绑定的地址。
+     *
+     * 可以使用 0.0.0.0 监听全部 IPv4 网卡。
+     */
+    private final String bindHost;
 
     /**
      * 当前服务端进入发布阶段时使用的地址。
@@ -81,7 +92,15 @@ public final class NettyRpcServer implements AutoCloseable {
         }
 
         this.port = config.getServerPort();
+        /*
+         * serverHost 只负责发布到注册中心。
+         */
         this.serverHost = config.getServerHost();
+
+        /*
+         * bindHost 只负责本机端口监听。
+         */
+        this.bindHost = config.getBindHost();
         this.heartbeatTimeoutSeconds =
                 config.getHeartbeatTimeoutSeconds();
         this.serviceProvider = serviceProvider;
@@ -178,19 +197,26 @@ public final class NettyRpcServer implements AutoCloseable {
 
         try{
             /*
-             * 同步等待端口绑定成功。
-             * serverHost 指定监听地址，port 指定监听端口。
+             * Netty 绑定的是 bindHost。
+             *
+             * 例如 bindHost=0.0.0.0，表示接受发送到
+             * 当前机器任意 IPv4 网卡的连接。
              */
-            serverChannel = bootstrap.bind(serverHost, port)
+            serverChannel = bootstrap.bind(bindHost, port)
                     .syncUninterruptibly()
                     .channel();
 
             /*
-             * 配置端口可能为 0，表示让操作系统分配空闲端口。
-             * 因此发布时必须使用 getPort() 返回的实际端口。
+             * 发布地址使用 serverHost，而不是 bindHost。
+             *
+             * createUnresolved() 不会在这里执行 DNS 查询，
+             * 并且能够原样保留用户配置的域名。
              */
             InetSocketAddress address =
-                    new InetSocketAddress(serverHost, getPort());
+                    InetSocketAddress.createUnresolved(
+                    serverHost,
+                    getPort()
+            );
 
             /*
              * 发布前先保存地址。

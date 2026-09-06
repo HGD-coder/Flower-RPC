@@ -27,7 +27,10 @@ public class ClientConfiguration {
      */
     @Bean
     public RpcFrameworkConfig rpcFrameworkConfig() {
-        // 整个客户端上下文共享这一份启动快照，运行期间不重复读取外部配置。
+        /*
+         * 发布地址、监听地址、注册中心和心跳参数
+         * 必须来自同一次配置加载。
+         */
         return RpcFrameworkConfig.load();
     }
 

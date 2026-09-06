@@ -20,6 +20,7 @@ class RpcConfigLoaderTest {
     private static final String[] SUPPORTED_KEYS = {
             RpcConfigLoader.ZK_ADDRESS_KEY,
             RpcConfigLoader.SERVER_HOST_KEY,
+            RpcConfigLoader.SERVER_BIND_HOST_KEY,
             RpcConfigLoader.SERVER_PORT_KEY,
             RpcConfigLoader.LOAD_BALANCE_KEY,
             RpcConfigLoader.SERIALIZER_KEY,
@@ -58,6 +59,7 @@ class RpcConfigLoaderTest {
 
         assertEquals("127.0.0.1:2181", config.getZkAddress());
         assertEquals("127.0.0.1", config.getServerHost());
+        assertEquals("0.0.0.0", config.getBindHost());
         assertEquals(9998, config.getServerPort());
         assertEquals("consistent-hash", config.getLoadBalance());
         assertEquals("kryo", config.getSerializer());
@@ -74,7 +76,8 @@ class RpcConfigLoaderTest {
     void shouldReadAllValuesFromClasspathRoot() {
         RpcFrameworkConfig config = RpcConfigLoader.load(resourceClassLoader(
                 "flower.rpc.zk.address=10.0.0.8:2182\n"
-                        + "flower.rpc.server.host=0.0.0.0\n"
+                        + "flower.rpc.server.host=10.0.0.8\n"
+                        + "flower.rpc.server.bind-host=0.0.0.0\n"
                         + "flower.rpc.server.port=10001\n"
                         + "flower.rpc.load-balance=random\n"
                         + "flower.rpc.serializer=jdk\n"
@@ -86,7 +89,8 @@ class RpcConfigLoaderTest {
         ));
 
         assertEquals("10.0.0.8:2182", config.getZkAddress());
-        assertEquals("0.0.0.0", config.getServerHost());
+        assertEquals("10.0.0.8", config.getServerHost());
+        assertEquals("0.0.0.0", config.getBindHost());
         assertEquals(10001, config.getServerPort());
         assertEquals("random", config.getLoadBalance());
         assertEquals("jdk", config.getSerializer());
@@ -156,6 +160,31 @@ class RpcConfigLoaderTest {
                 RpcConfigLoader.HEARTBEAT_TIMEOUT_SECONDS_KEY,
                 "5"
         );
+    }
+
+    @Test
+    void shouldRejectWildcardAdvertisedHosts() {
+        assertInvalid(
+                "flower.rpc.server.host=0.0.0.0\n",
+                RpcConfigLoader.SERVER_HOST_KEY,
+                "0.0.0.0"
+        );
+        assertInvalid(
+                "flower.rpc.server.host=::\n",
+                RpcConfigLoader.SERVER_HOST_KEY,
+                "::"
+        );
+    }
+
+    @Test
+    void shouldReadIpv6AdvertisedHostAndIpv6BindHostFromClasspathFile() {
+        RpcFrameworkConfig config = RpcConfigLoader.load(resourceClassLoader(
+                "flower.rpc.server.host=2001:db8::10\n"
+                        + "flower.rpc.server.bind-host=::\n"
+        ));
+
+        assertEquals("2001:db8::10", config.getServerHost());
+        assertEquals("::", config.getBindHost());
     }
 
     private void assertInvalid(String fileContent, String key, String value) {

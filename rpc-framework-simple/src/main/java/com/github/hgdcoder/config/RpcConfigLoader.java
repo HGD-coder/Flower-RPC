@@ -17,6 +17,12 @@ public final class RpcConfigLoader {
 
     public static final String ZK_ADDRESS_KEY = "flower.rpc.zk.address";
     public static final String SERVER_HOST_KEY = "flower.rpc.server.host";
+
+    /**
+     * RPC 服务端在本机真正监听的地址。
+     */
+    public static final String SERVER_BIND_HOST_KEY = "flower.rpc.server.bind-host";
+
     public static final String SERVER_PORT_KEY = "flower.rpc.server.port";
     public static final String LOAD_BALANCE_KEY = "flower.rpc.load-balance";
     public static final String SERIALIZER_KEY = "flower.rpc.serializer";
@@ -53,11 +59,28 @@ public final class RpcConfigLoader {
         RpcFrameworkConfig defaults = RpcFrameworkConfig.defaults();
 
         return defaults.toBuilder()
-                .zkAddress(resolve(ZK_ADDRESS_KEY, fileProperties, defaults.getZkAddress()))
-                .serverHost(resolve(SERVER_HOST_KEY, fileProperties, defaults.getServerHost()))
+                .zkAddress(resolve(
+                        ZK_ADDRESS_KEY,
+                        fileProperties,
+                        defaults.getZkAddress()))
+                .serverHost(resolve(SERVER_HOST_KEY,
+                        fileProperties,
+                        defaults.getServerHost()))
+                /*
+                 * bindHost 与 serverHost 分开读取：
+                 *
+                 * serverHost：注册给客户端连接的地址；
+                 * bindHost：服务端在本机监听的地址。
+                 */
+                .bindHost(resolve(
+                        SERVER_BIND_HOST_KEY,
+                        fileProperties,
+                        defaults.getBindHost()
+                ))
                 .serverPort(parseInt(
                         SERVER_PORT_KEY,
-                        resolve(SERVER_PORT_KEY,fileProperties,
+                        resolve(SERVER_PORT_KEY,
+                                fileProperties,
                                 String.valueOf(defaults.getServerPort())),
                         1,
                         65535
