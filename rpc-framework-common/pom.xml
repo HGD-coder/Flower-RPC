@@ -22,10 +22,6 @@
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>
         </dependency>
-        <dependency>
-            <groupId>ch.qos.logback</groupId>
-            <artifactId>logback-classic</artifactId>
-        </dependency>
         <!-- common 模块只测试自身的枚举和异常，不反向依赖 simple。 -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>

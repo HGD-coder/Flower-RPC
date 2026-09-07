@@ -21,6 +21,11 @@
             <groupId>com.github.hgdcoder</groupId>
             <artifactId>rpc-framework-simple</artifactId>
         </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-simple</artifactId>
+            <scope>runtime</scope>
+        </dependency>
     </dependencies>
 
 </project>

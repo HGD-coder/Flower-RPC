@@ -22,6 +22,10 @@
             <groupId>com.github.hgdcoder</groupId>
             <artifactId>rpc-framework-common</artifactId>
         </dependency>
+        <dependency>
+            <groupId>org.apache.curator</groupId>
+            <artifactId>curator-client</artifactId>
+        </dependency>
         <!-- V6：使用 Curator 5 的 CuratorCache 连接 ZooKeeper，并监听服务节点变化。 -->
         <dependency>
             <groupId>org.apache.curator</groupId>
@@ -31,7 +35,7 @@
             <groupId>org.apache.curator</groupId>
             <artifactId>curator-recipes</artifactId>
         </dependency>
-        <!-- 显式声明客户端版本，使它与 Docker 中的 ZooKeeper 3.8.6 保持一致。 -->
+        <!-- 显式声明客户端版本，使它与 Docker 中的 ZooKeeper 保持一致。 -->
         <dependency>
             <groupId>org.apache.zookeeper</groupId>
             <artifactId>zookeeper</artifactId>
@@ -40,17 +44,40 @@
         <dependency>
             <groupId>com.esotericsoftware</groupId>
             <artifactId>kryo</artifactId>
-            <version>5.3.0</version>
         </dependency>
-        <!-- V10：Netty NIO 传输层，版本由根 POM 统一管理。 -->
+        <!-- Netty NIO 传输层，版本由根 POM 的 BOM 统一管理。 -->
         <dependency>
             <groupId>io.netty</groupId>
-            <artifactId>netty-all</artifactId>
+            <artifactId>netty-buffer</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-codec-base</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-common</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-handler</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-transport</artifactId>
         </dependency>
         <!-- V13：注解扫描和 Bean 生命周期桥接由 Spring Context 提供。 -->
         <dependency>
             <groupId>org.springframework</groupId>
+            <artifactId>spring-beans</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework</groupId>
             <artifactId>spring-context</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-core</artifactId>
         </dependency>
 
         <!-- test -->
@@ -59,12 +86,11 @@
             <artifactId>junit-jupiter</artifactId>
             <scope>test</scope>
         </dependency>
-        <dependency>
-            <groupId>org.mockito</groupId>
-            <artifactId>mockito-core</artifactId>
-            <scope>test</scope>
-        </dependency>
         <!-- V15：Protostuff 序列化。 -->
+        <dependency>
+            <groupId>io.protostuff</groupId>
+            <artifactId>protostuff-api</artifactId>
+        </dependency>
         <dependency>
             <groupId>io.protostuff</groupId>
             <artifactId>protostuff-core</artifactId>
