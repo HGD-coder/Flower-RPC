@@ -36,6 +36,7 @@
         <protostuff.version>1.8.0</protostuff.version>
         <hessian.version>4.0.66</hessian.version>
         <lombok.version>1.18.46</lombok.version>
+        <hdrhistogram.version>2.2.2</hdrhistogram.version>
 
         <maven.compiler.plugin.version>3.15.0</maven.compiler.plugin.version>
         <maven.clean.plugin.version>3.5.0</maven.clean.plugin.version>
@@ -169,6 +170,11 @@
                 <groupId>com.caucho</groupId>
                 <artifactId>hessian</artifactId>
                 <version>${hessian.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.hdrhistogram</groupId>
+                <artifactId>HdrHistogram</artifactId>
+                <version>${hdrhistogram.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

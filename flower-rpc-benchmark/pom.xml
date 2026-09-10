@@ -15,6 +15,10 @@
     <dependencies>
         <dependency>
             <groupId>com.github.hgdcoder</groupId>
+            <artifactId>rpc-framework-common</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.github.hgdcoder</groupId>
             <artifactId>hello-service-api</artifactId>
         </dependency>
         <dependency>
@@ -25,6 +29,15 @@
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-simple</artifactId>
             <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.hdrhistogram</groupId>
+            <artifactId>HdrHistogram</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 
