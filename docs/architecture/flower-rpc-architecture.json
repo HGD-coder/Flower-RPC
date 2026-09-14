@@ -1,0 +1,227 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Flower-RPC 项目架构",
+    "output": "flower-rpc-architecture.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/HGD-coder/Flower-RPC.git",
+      "revision": "cf934f1d0c0652537a88b411d580ecefe94dd5b1"
+    },
+    "viewBox": [1740, 820],
+    "views": [
+      {
+        "id": "rpc-main-path",
+        "label": "RPC 主调用链",
+        "focus": ["example-client", "rpc-proxy", "discovery-lb", "netty-client", "wire-protocol", "netty-server", "request-dispatch", "hello-service"],
+        "note": "从 @RpcReference 动态代理出发，经发现、传输与服务端反射执行完成一次调用。"
+      },
+      {
+        "id": "registry-control-plane",
+        "label": "注册发现控制面",
+        "focus": ["discovery-lb", "zookeeper", "request-dispatch"],
+        "note": "服务端发布地址，客户端监听节点并用一致性哈希选择实例；ZooKeeper 不承载业务报文。"
+      },
+      {
+        "id": "extension-foundation",
+        "label": "扩展与共享契约",
+        "focus": ["shared-api", "spi-core", "rpc-proxy", "discovery-lb", "wire-protocol", "request-dispatch", "hello-service"],
+        "note": "共享 API 约束两端类型，ExtensionLoader 与配置选择注册、传输、序列化和负载均衡实现。"
+      }
+    ],
+    "legend": {
+      "mode": "auto",
+      "entries": {
+        "frontend": { "label": "示例应用" },
+        "backend": { "label": "RPC 运行时组件" },
+        "database": { "label": "注册中心" },
+        "messagebus": { "label": "请求响应数据面" },
+        "external": { "label": "共享契约与基础能力" }
+      }
+    }
+  },
+  "components": [
+    {
+      "id": "example-client",
+      "type": "frontend",
+      "label": "example-client",
+      "sublabel": "Spring · HelloController",
+      "pos": [40, 300],
+      "size": [150, 70],
+      "sources": [
+        { "path": "example-client/src/main/java/com/github/hgdcoder/client/ClientMain.java", "line": 12, "end_line": 23, "label": "客户端入口" },
+        { "path": "example-client/src/main/java/com/github/hgdcoder/client/HelloController.java", "line": 11, "end_line": 17, "label": "远程引用" }
+      ]
+    },
+    {
+      "id": "rpc-proxy",
+      "type": "backend",
+      "label": "Spring 集成与动态代理",
+      "sublabel": "@RpcReference · RpcClientProxy",
+      "pos": [300, 300],
+      "size": [180, 70],
+      "sources": [
+        { "path": "rpc-framework-simple/src/main/java/com/github/hgdcoder/spring/SpringBeanPostProcessor.java", "line": 195, "end_line": 223, "label": "代理注入" },
+        { "path": "rpc-framework-simple/src/main/java/com/github/hgdcoder/proxy/RpcClientProxy.java", "line": 73, "end_line": 119, "label": "请求构造" }
+      ]
+    },
+    {
+      "id": "discovery-lb",
+      "type": "backend",
+      "label": "服务发现与负载均衡",
+      "sublabel": "ZooKeeper · 一致性哈希",
+      "pos": [590, 300],
+      "size": [180, 70],
+      "sources": [
+        { "path": "rpc-framework-simple/src/main/java/com/github/hgdcoder/registry/zk/ZkServiceDiscovery.java", "line": 55, "end_line": 93, "label": "地址发现" },
+        { "path": "rpc-framework-simple/src/main/java/com/github/hgdcoder/loadbalance/loadbalancer/ConsistentHashLoadBalance.java", "line": 56, "end_line": 80, "label": "实例选择" }
+      ]
+    },
+    {
+      "id": "netty-client",
+      "type": "backend",
+      "label": "NettyRpcClient",
+      "sublabel": "连接复用 · Pending Future",
+      "pos": [880, 300],
+      "size": [175, 70],
+      "sources": [
+        { "path": "rpc-framework-simple/src/main/java/com/github/hgdcoder/transport/netty/client/NettyRpcClient.java", "line": 165, "end_line": 238, "label": "异步发送" },
+        { "path": "rpc-framework-simple/src/main/java/com/github/hgdcoder/transport/netty/client/UnprocessedRequests.java", "line": 19, "end_line": 47, "label": "请求挂起" }
+      ]
+    },
+    {
+      "id": "wire-protocol",
+      "type": "messagebus",
+      "label": "自定义 RPC 协议",
+      "sublabel": "TCP · 帧 · Kryo · GZIP",
+      "tag": "16-byte header",
+      "pos": [1165, 300],
+      "size": [170, 70],
+      "sources": [
+        { "path": "rpc-framework-simple/src/main/java/com/github/hgdcoder/remoting/constants/RpcConstants.java", "line": 8, "end_line": 25, "label": "协议头" },
+        { "path": "rpc-framework-simple/src/main/java/com/github/hgdcoder/remoting/codec/NettyRpcMessageEncoder.java", "line": 28, "end_line": 69, "label": "编码与压缩" }
+      ]
+    },
+    {
+      "id": "netty-server",
+      "type": "backend",
+      "label": "NettyRpcServer",
+      "sublabel": "Pipeline · 心跳 · Handler",
+      "pos": [1445, 300],
+      "size": [175, 70],
+      "sources": [
+        { "path": "rpc-framework-simple/src/main/java/com/github/hgdcoder/transport/netty/server/NettyRpcServer.java", "line": 161, "end_line": 228, "label": "服务端 Pipeline" }
+      ]
+    },
+    {
+      "id": "request-dispatch",
+      "type": "backend",
+      "label": "服务发布与请求分发",
+      "sublabel": "ServiceProvider · 反射调用",
+      "pos": [1445, 540],
+      "size": [175, 70],
+      "sources": [
+        { "path": "rpc-framework-simple/src/main/java/com/github/hgdcoder/remoting/handler/RpcRequestHandler.java", "line": 19, "end_line": 51, "label": "反射执行" },
+        { "path": "rpc-framework-simple/src/main/java/com/github/hgdcoder/provider/impl/DefaultServiceProvider.java", "line": 1, "label": "本地服务容器" }
+      ]
+    },
+    {
+      "id": "hello-service",
+      "type": "frontend",
+      "label": "example-server",
+      "sublabel": "@RpcService · HelloServiceImpl",
+      "pos": [1165, 540],
+      "size": [170, 70],
+      "sources": [
+        { "path": "example-server/src/main/java/com/github/hgdcoder/server/HelloServiceImpl.java", "line": 7, "end_line": 12, "label": "服务实现" },
+        { "path": "example-server/src/main/java/com/github/hgdcoder/server/ServerMain.java", "line": 22, "end_line": 36, "label": "服务端入口" }
+      ]
+    },
+    {
+      "id": "zookeeper",
+      "type": "database",
+      "label": "ZooKeeper",
+      "sublabel": "临时节点 · CuratorCache",
+      "tag": "控制面",
+      "pos": [1445, 70],
+      "size": [175, 70],
+      "sources": [
+        { "path": "rpc-framework-simple/src/main/java/com/github/hgdcoder/registry/zk/ZkServiceRegistry.java", "line": 35, "end_line": 88, "label": "服务注册" },
+        { "path": "rpc-framework-simple/src/main/java/com/github/hgdcoder/registry/zk/CuratorUtils.java", "line": 272, "end_line": 298, "label": "地址缓存" }
+      ]
+    },
+    {
+      "id": "shared-api",
+      "type": "external",
+      "label": "hello-service-api",
+      "sublabel": "HelloService · DTO · 异步接口",
+      "tag": "共享契约",
+      "pos": [300, 540],
+      "size": [180, 70],
+      "sources": [
+        { "path": "hello-service-api/src/main/java/com/github/hgdcoder/HelloService.java", "line": 3, "end_line": 5, "label": "服务接口" },
+        { "path": "hello-service-api/pom.xml", "line": 13, "end_line": 21, "label": "独立模块" }
+      ]
+    },
+    {
+      "id": "spi-core",
+      "type": "external",
+      "label": "rpc-framework-common",
+      "sublabel": "ExtensionLoader · 枚举 · 异常 · 工具",
+      "tag": "SPI 基础层",
+      "pos": [590, 540],
+      "size": [180, 70],
+      "sources": [
+        { "path": "rpc-framework-common/src/main/java/com/github/hgdcoder/extension/ExtensionLoader.java", "line": 318, "end_line": 356, "label": "扩展资源加载" },
+        { "path": "rpc-framework-common/pom.xml", "line": 15, "end_line": 31, "label": "基础依赖" }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "客户端进程",
+      "wraps": ["example-client", "rpc-proxy", "discovery-lb", "netty-client"],
+      "pad": 20
+    },
+    {
+      "kind": "region",
+      "label": "服务端进程",
+      "wraps": ["netty-server", "request-dispatch", "hello-service"],
+      "pad": 20
+    }
+  ],
+  "connections": [
+    { "id": "client-call", "from": "example-client", "to": "rpc-proxy", "label": "业务方法调用", "variant": "emphasis" },
+    { "id": "proxy-request", "from": "rpc-proxy", "to": "discovery-lb", "label": "RpcRequest", "variant": "emphasis" },
+    { "id": "select-address", "from": "discovery-lb", "to": "netty-client", "label": "选定服务地址", "variant": "emphasis" },
+    { "id": "client-encode", "from": "netty-client", "to": "wire-protocol", "label": "编码并发送", "variant": "emphasis" },
+    { "id": "tcp-roundtrip", "from": "wire-protocol", "to": "netty-server", "label": "RPC 请求 / 响应", "variant": "emphasis" },
+    { "id": "server-dispatch", "from": "netty-server", "to": "request-dispatch", "label": "解码后分发", "variant": "emphasis", "fromSide": "bottom", "toSide": "top", "labelAt": [1533, 384] },
+    { "id": "invoke-service", "from": "request-dispatch", "to": "hello-service", "label": "反射执行", "variant": "emphasis" },
+    { "id": "discover-address", "from": "zookeeper", "to": "discovery-lb", "label": "节点监听 / 地址缓存", "variant": "dashed", "fromSide": "left", "toSide": "top" },
+    { "id": "publish-address", "from": "netty-server", "to": "zookeeper", "label": "绑定成功后发布", "variant": "dashed" },
+    { "id": "client-contract", "from": "shared-api", "to": "rpc-proxy", "label": "共享接口", "variant": "dashed", "fromSide": "top", "toSide": "bottom" },
+    { "id": "server-contract", "from": "shared-api", "to": "hello-service", "label": "实现契约", "variant": "dashed", "fromSide": "bottom", "toSide": "bottom" },
+    { "id": "spi-extensions", "from": "spi-core", "to": "discovery-lb", "label": "ExtensionLoader", "variant": "dashed", "fromSide": "top", "toSide": "bottom" },
+    { "id": "runtime-foundation", "from": "spi-core", "to": "wire-protocol", "label": "序列化 / 压缩 SPI", "variant": "dashed" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "主数据面",
+      "items": ["默认使用 Netty 长连接与自定义 16 字节协议头", "Kryo 序列化后可经 GZIP 压缩，响应通过 Pending Future 匹配"]
+    },
+    {
+      "dot": "violet",
+      "title": "注册发现控制面",
+      "items": ["服务端绑定成功后发布 ZooKeeper 临时节点", "客户端监听地址变化并以一致性哈希选择实例"]
+    },
+    {
+      "dot": "emerald",
+      "title": "模块与扩展",
+      "items": ["hello-service-api 是客户端与服务端共享契约", "SPI 可替换注册发现、客户端传输、负载均衡、序列化与压缩实现"]
+    }
+  ]
+}
