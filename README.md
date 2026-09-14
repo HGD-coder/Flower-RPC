@@ -7,6 +7,12 @@ Flower-RPC 是一个用于学习 RPC 原理与 Java 网络编程的教学型实�
 > [!IMPORTANT]
 > 项目仍在学习和开发中，尚未完成，也未按生产环境标准进行完整验证，请勿直接用于生产系统。
 
+<p align="center">
+  <a href="docs/architecture/flower-rpc-architecture.html">
+    <img src="docs/architecture/flower-rpc-architecture.png" alt="Flower-RPC 项目架构图" width="100%">
+  </a>
+</p>
+
 ## 架构图
 
 - [查看交互式项目架构图](docs/architecture/flower-rpc-architecture.html)（下载仓库后可直接在浏览器打开）

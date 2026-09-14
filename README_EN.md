@@ -7,6 +7,12 @@ Flower-RPC is an educational RPC framework for learning RPC fundamentals and Jav
 > [!IMPORTANT]
 > This project is still under development and has not been fully validated for production use. Do not use it directly in production systems.
 
+<p align="center">
+  <a href="docs/architecture/flower-rpc-architecture.html">
+    <img src="docs/architecture/flower-rpc-architecture.png" alt="Flower-RPC project architecture" width="100%">
+  </a>
+</p>
+
 ## Architecture
 
 - [Open the interactive architecture diagram](docs/architecture/flower-rpc-architecture.html) (clone or download the repository and open it in a browser)
