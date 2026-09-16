@@ -49,6 +49,23 @@ public class GzipCompressTest {
         );
     }
 
+    @Test
+    void shouldRejectNullBytesWithExpectedMessage() {
+        GzipCompress gzip = new GzipCompress();
+
+        NullPointerException compressException = assertThrows(
+                NullPointerException.class,
+                () -> gzip.compress(null)
+        );
+        NullPointerException decompressException = assertThrows(
+                NullPointerException.class,
+                () -> gzip.decompress(null)
+        );
+
+        assertEquals("bytes must not be null", compressException.getMessage());
+        assertEquals("bytes must not be null", decompressException.getMessage());
+    }
+
     private byte[] repeatedBytes(String text, int count) {
         byte[] block = text.getBytes(StandardCharsets.UTF_8);
         byte[] result = new byte[block.length * count];

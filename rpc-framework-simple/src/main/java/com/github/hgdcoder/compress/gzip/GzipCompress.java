@@ -6,6 +6,7 @@ import com.github.hgdcoder.remoting.constants.RpcConstants;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.util.Objects;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 
@@ -66,8 +67,6 @@ public class GzipCompress implements Compress {
     }
 
     private void requireBytes(byte[] bytes) {
-        if(bytes == null) {
-            throw new NullPointerException("bytes must not be null");
-        }
+        Objects.requireNonNull(bytes, "bytes must not be null");
     }
 }
