@@ -6,8 +6,10 @@ import com.github.hgdcoder.remoting.codec.NettyRpcFrameDecoder;
 import com.github.hgdcoder.remoting.codec.NettyRpcMessageDecoder;
 import com.github.hgdcoder.remoting.codec.NettyRpcMessageEncoder;
 import com.github.hgdcoder.remoting.constants.RpcConstants;
+import com.github.hgdcoder.remoting.dto.RpcRequest;
 import com.github.hgdcoder.remoting.handler.RpcRequestHandler;
 import com.github.hgdcoder.transport.netty.handler.NettyRpcHeartbeatHandler;
+import com.github.hgdcoder.utils.concurrent.threadpool.CustomThreadPoolConfig;
 import com.github.hgdcoder.utils.concurrent.threadpool.ThreadPoolFactoryUtil;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
@@ -21,8 +23,11 @@ import io.netty.handler.timeout.IdleStateHandler;
 import io.netty.util.concurrent.DefaultEventExecutorGroup;
 
 import java.net.InetSocketAddress;
+import java.util.Objects;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Predicate;
 
 /**
  * Netty RPC 服务端：I/O 线程只负责网络事件，反射调用由独立业务线程组执行。
@@ -66,8 +71,20 @@ public final class NettyRpcServer implements AutoCloseable {
     // 处理已建立连接的读写事件的 I/O 线程组。
     private final EventLoopGroup workerGroup;
 
-    // 专门执行可能阻塞的业务调用，避免占用 workerGroup 的 I/O 线程。
-    private final DefaultEventExecutorGroup businessGroup;
+    /**
+     * 执行短耗时、低延迟业务。
+     */
+    private final ThreadPoolExecutor fastBusinessExecutor;
+
+    /**
+     * 执行阻塞或长耗时业务。
+     */
+    private final ThreadPoolExecutor slowBusinessExecutor;
+
+    /**
+     * 服务端可信的请求分类规则。
+     */
+    private final Predicate<RpcRequest> slowRequestPredicate;
 
     // 控制 start/close 的一次性生命周期；关闭后不允许重新绑定。
     private final AtomicBoolean closed = new AtomicBoolean();
@@ -75,10 +92,10 @@ public final class NettyRpcServer implements AutoCloseable {
     // 绑定成功后可见的监听 Channel，volatile 让 getPort 可读取实际分配的端口。
     private volatile Channel serverChannel;
 
-
     public NettyRpcServer(
             RpcFrameworkConfig config,
-            ServiceProvider serviceProvider
+            ServiceProvider serviceProvider,
+            Predicate<RpcRequest> slowRequestPredicate
     ) {
         if (config == null) {
             throw new IllegalArgumentException(
@@ -91,34 +108,53 @@ public final class NettyRpcServer implements AutoCloseable {
             );
         }
 
-        this.port = config.getServerPort();
-        /*
-         * serverHost 只负责发布到注册中心。
-         */
-        this.serverHost = config.getServerHost();
+        this.slowRequestPredicate = Objects.requireNonNull(
+                slowRequestPredicate,
+                "slowRequestPredicate must not be null"
+        );
 
-        /*
-         * bindHost 只负责本机端口监听。
-         */
+        this.port = config.getServerPort();
+        this.serverHost = config.getServerHost();
         this.bindHost = config.getBindHost();
         this.heartbeatTimeoutSeconds =
                 config.getHeartbeatTimeoutSeconds();
         this.serviceProvider = serviceProvider;
 
-        // 参数校验通过后才创建重量级线程资源。
         this.bossGroup = new NioEventLoopGroup(1);
         this.workerGroup = new NioEventLoopGroup();
-        this.businessGroup =
-                new DefaultEventExecutorGroup(
-                        Math.max(
-                                2,
-                                Runtime.getRuntime().availableProcessors()
-                        ),
-                        ThreadPoolFactoryUtil.createThreadFactory(
-                                "flower-rpc-netty-business",
-                                false
-                        )
-                );
+
+        int processors =
+                Runtime.getRuntime().availableProcessors();
+
+        this.fastBusinessExecutor = createBusinessExecutor(
+                Math.max(2, processors),
+                128,
+                "flower-rpc-fast"
+        );
+
+        this.slowBusinessExecutor = createBusinessExecutor(
+                Math.max(4, processors * 2),
+                256,
+                "flower-rpc-slow"
+        );
+    }
+
+    public NettyRpcServer(
+            RpcFrameworkConfig config,
+            ServiceProvider serviceProvider
+    ) {
+        /*
+         * 默认从 ServiceProvider 查询服务端方法分类。
+         *
+         * 使用 lambda 而不是立即创建方法引用，
+         * 可以让三参数构造器继续统一处理 null 校验。
+         */
+        this(
+                config,
+                serviceProvider,
+                request -> serviceProvider != null
+                                    && serviceProvider.isSlowRequest(request)
+        );
     }
 
     public NettyRpcServer(
@@ -131,6 +167,32 @@ public final class NettyRpcServer implements AutoCloseable {
                         .serverPort(port)
                         .build(),
                 serviceProvider
+        );
+    }
+
+    private static ThreadPoolExecutor createBusinessExecutor(
+            int threadCount,
+            int queueCapacity,
+            String threadNamePrefix
+    ) {
+        CustomThreadPoolConfig poolConfig = CustomThreadPoolConfig.builder()
+                        /*
+                         * 固定大小线程池，行为更容易理解和压测。
+                         */
+                        .corePoolSize(threadCount)
+                        .maximumPoolSize(threadCount)
+                        .queueCapacity(queueCapacity)
+                        .build();
+
+        return ThreadPoolFactoryUtil.createThreadPool(
+                poolConfig,
+                threadNamePrefix,
+                false,
+                /*
+                 * 队列满时抛出 RejectedExecutionException，
+                 * 由 NettyRpcServerHandler 返回 RESOURCE_EXHAUSTED。
+                 */
+                new ThreadPoolExecutor.AbortPolicy()
         );
     }
 
@@ -150,8 +212,12 @@ public final class NettyRpcServer implements AutoCloseable {
         }
 
         NettyRpcServerHandler serverHandler = new NettyRpcServerHandler(
-                new RpcRequestHandler(serviceProvider)
+                new RpcRequestHandler(serviceProvider),
+                fastBusinessExecutor,
+                slowBusinessExecutor,
+                slowRequestPredicate
         );
+
         /*
          * 心跳处理器不保存连接级状态，可以被全部 SocketChannel 共享。
          * 它留在 worker I/O 线程执行，不进入可能被慢业务占满的 businessGroup。
@@ -188,7 +254,6 @@ public final class NettyRpcServer implements AutoCloseable {
                                 heartbeatHandler
                         );
                         channel.pipeline().addLast(
-                                businessGroup,
                                 "rpcServerHandler",
                                 serverHandler
                         );
@@ -297,9 +362,18 @@ public final class NettyRpcServer implements AutoCloseable {
             }
         }
 
-        // 先关闭业务执行器，随后关闭连接 I/O 和接入线程组。
-        businessGroup.shutdownGracefully(0,5, TimeUnit.SECONDS)
-                .syncUninterruptibly();
+
+        ThreadPoolFactoryUtil.shutdownGracefully(
+                fastBusinessExecutor,
+                5,
+                TimeUnit.SECONDS
+        );
+
+        ThreadPoolFactoryUtil.shutdownGracefully(
+                slowBusinessExecutor,
+                5,
+                TimeUnit.SECONDS
+        );
         workerGroup.shutdownGracefully(0,5, TimeUnit.SECONDS)
                 .syncUninterruptibly();
         bossGroup.shutdownGracefully(0,5, TimeUnit.SECONDS)

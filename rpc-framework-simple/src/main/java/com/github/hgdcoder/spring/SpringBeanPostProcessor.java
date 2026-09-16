@@ -105,7 +105,7 @@ public class SpringBeanPostProcessor implements BeanPostProcessor {
             rpcServices.put(
                     beanName,
                     new RpcServiceMetadata(
-                            beanClass.getName(),
+                            beanClass,
 
                             // 目前仍约定第一个接口是 RPC 服务接口。
                             serviceInterfaces[0].getName(),
@@ -144,11 +144,11 @@ public class SpringBeanPostProcessor implements BeanPostProcessor {
             // 到真正需要发布时才从 ObjectProvider 获取依赖，降低 Bean 创建顺序导致的循环依赖风险。
             serviceProvider = serviceProviderProvider.getIfAvailable();
         } catch (RuntimeException e) {
-            throw serviceFailure(beanName, metadata.beanClassName,
+            throw serviceFailure(beanName, metadata.beanClass.getName(),
                     "cannot resolve ServiceProvider", e);
         }
         if (serviceProvider == null) {
-            throw serviceFailure(beanName, metadata.beanClassName,
+            throw serviceFailure(beanName, metadata.beanClass.getName(),
                     "no ServiceProvider bean is available", null);
         }
 
@@ -159,7 +159,13 @@ public class SpringBeanPostProcessor implements BeanPostProcessor {
                  * 它有可能是经过 AOP 包装的代理对象。
                  */
                 .service(bean)
+                /**
+                 * UserServiceImpl.class
+                 * 原始业务类
+                 */
+                .serviceClass(metadata.beanClass)
                 /*
+                com.xxx.UserService
                  * 接口名来自初始化前的用户类，
                  * 不再依赖代理对象运行时暴露的接口顺序。
                  */
@@ -180,7 +186,7 @@ public class SpringBeanPostProcessor implements BeanPostProcessor {
             // 本地登记失败时，让 Spring 启动失败，并保留原因
             throw serviceFailure(
                     beanName,
-                    metadata.beanClassName,
+                    metadata.beanClass.getName(),
                     "failed to add local RPC service",
                     e
             );
@@ -357,11 +363,9 @@ public class SpringBeanPostProcessor implements BeanPostProcessor {
      */
     private static final class RpcServiceMetadata {
         /**
-         * 用户编写的业务实现类名称。
-         *
-         * 主要用于生成清晰的异常信息。
+         * Spring 创建代理前的用户业务类。
          */
-        private final String beanClassName;
+        private final Class<?> beanClass;
 
         /**
          * RPC 服务接口的全限定名。
@@ -380,18 +384,18 @@ public class SpringBeanPostProcessor implements BeanPostProcessor {
         /**
          * 创建服务发布元数据。
          *
-         * @param beanClassName 服务实现 Bean 的用户类全限定名
+         * @param beanClass
          * @param serviceName
          * @param group 服务分组
          * @param version 服务版本
          */
         private RpcServiceMetadata(
-                String beanClassName,
+                Class<?> beanClass,
                 String serviceName,
                 String group,
                 String version
         ) {
-            this.beanClassName = beanClassName;
+            this.beanClass = beanClass;
             this.serviceName = serviceName;
             this.group = group;
             this.version = version;

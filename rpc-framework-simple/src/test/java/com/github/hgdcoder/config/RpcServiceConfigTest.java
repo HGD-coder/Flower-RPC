@@ -4,6 +4,7 @@ import com.github.hgdcoder.remoting.dto.RpcRequest;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 
 class RpcServiceConfigTest {
 
@@ -26,5 +27,22 @@ class RpcServiceConfigTest {
 
         assertEquals(serviceName, serviceConfig.getServiceName());
         assertEquals(request.getRpcServiceName(), serviceConfig.getRpcServiceName());
+    }
+
+    @Test
+    void shouldKeepFourArgumentConstructorCompatible() {
+        Object service = new Object();
+        RpcServiceConfig serviceConfig = new RpcServiceConfig(
+                "com.example.EchoService",
+                "v1",
+                "default",
+                service
+        );
+
+        assertEquals("com.example.EchoService", serviceConfig.getServiceName());
+        assertEquals("v1", serviceConfig.getVersion());
+        assertEquals("default", serviceConfig.getGroup());
+        assertSame(service, serviceConfig.getService());
+        assertSame(service.getClass(), serviceConfig.getServiceClass());
     }
 }

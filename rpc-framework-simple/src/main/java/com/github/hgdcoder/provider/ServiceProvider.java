@@ -1,6 +1,7 @@
 package com.github.hgdcoder.provider;
 
 import com.github.hgdcoder.config.RpcServiceConfig;
+import com.github.hgdcoder.remoting.dto.RpcRequest;
 
 import java.net.InetSocketAddress;
 
@@ -26,4 +27,14 @@ public interface ServiceProvider {
 
     /** Netty 停止监听后，下线该地址的全部服务。 */
     void unpublishAllServices(InetSocketAddress serverAddress);
+
+    /**
+     * 判断请求是否应该进入慢业务线程池。
+     *
+     * <p>自定义 ServiceProvider 如果没有方法分类能力，
+     * 默认把请求作为 fast 处理。</p>
+     */
+    default boolean isSlowRequest(RpcRequest request) {
+        return false;
+    }
 }

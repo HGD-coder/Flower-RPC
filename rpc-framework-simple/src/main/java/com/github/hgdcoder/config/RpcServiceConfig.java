@@ -55,6 +55,29 @@ public class RpcServiceConfig {
     private Object service;
 
     /**
+     * 用户编写的原始服务实现类。
+     *
+     * <p>Spring Bean 可能在初始化后被 JDK/CGLIB 代理，
+     * 因此不能始终通过 service.getClass() 查找方法注解。</p>
+     *
+     * <p>手动注册服务时可以不填写，框架会使用 service.getClass()。</p>
+     */
+    private Class<?> serviceClass;
+
+    /**
+     * 保留新增 serviceClass 之前的公开构造器签名，避免已有调用方失效。
+     * 手动注册场景会在需要扫描注解时从 service 推导实际实现类。
+     */
+    public RpcServiceConfig(
+            String serviceName,
+            String version,
+            String group,
+            Object service
+    ) {
+        this(serviceName, version, group, service, null);
+    }
+
+    /**
      * 生成注册中心、本地服务容器共同使用的完整服务键。
      */
     public String getRpcServiceName() {
@@ -107,5 +130,23 @@ public class RpcServiceConfig {
          * 第一个接口就是需要发布的 RPC 接口。
          */
         return interfaces[0].getName();
+    }
+
+    /**
+     * 返回用于扫描 RPC 方法注解的原始实现类。
+     */
+    public Class<?> getServiceClass() {
+        if (serviceClass != null) {
+            return serviceClass;
+        }
+
+        if (service == null) {
+            throw new IllegalArgumentException(
+                    "Rpc service must not be null "
+                            + "when serviceClass is absent"
+            );
+        }
+
+        return service.getClass();
     }
 }

@@ -5,12 +5,11 @@ import com.github.hgdcoder.enums.RpcErrorMessageEnum;
 import com.github.hgdcoder.exception.RpcException;
 import com.github.hgdcoder.provider.ServiceProvider;
 import com.github.hgdcoder.registry.ServiceRegistry;
+import com.github.hgdcoder.provider.RpcMethodExecutionRegistry;
+import com.github.hgdcoder.remoting.dto.RpcRequest;
 
 import java.net.InetSocketAddress;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class DefaultServiceProvider implements ServiceProvider {
@@ -26,6 +25,12 @@ public class DefaultServiceProvider implements ServiceProvider {
 
     // 已成功写入注册中心的服务名    用于避免重复发布，并记录关闭时需要注销哪些服务
     private final Set<String> publishedService = ConcurrentHashMap.newKeySet();
+
+    /**
+     * 服务端方法执行类型注册表。
+     */
+    private final RpcMethodExecutionRegistry methodExecutionRegistry =
+            new RpcMethodExecutionRegistry();
 
     /** 当前这个服务提供者发布到注册中心的地址。 */
     private InetSocketAddress publishedAddress;
@@ -46,8 +51,16 @@ public class DefaultServiceProvider implements ServiceProvider {
 
     @Override
     public synchronized void addService(RpcServiceConfig rpcServiceConfig) {
+        Objects.requireNonNull(
+                rpcServiceConfig,
+                "rpcServiceConfig must not be null"
+        );
+
         String rpcServiceName = rpcServiceConfig.getRpcServiceName();
-        Object service = rpcServiceConfig.getService();
+        Object service = Objects.requireNonNull(
+                rpcServiceConfig.getService(),
+                "RPC service must not be null"
+        );
 
         /*
          * putIfAbsent：只有名称不存在时才放入。
@@ -72,7 +85,22 @@ public class DefaultServiceProvider implements ServiceProvider {
             );
         }
 
-        registeredService.add(rpcServiceName);
+
+        try {
+            methodExecutionRegistry.register(
+                    rpcServiceConfig
+            );
+            registeredService.add(rpcServiceName);
+        } catch (RuntimeException registrationFailure) {
+            serviceMap.remove(rpcServiceName, service);
+            registeredService.remove(rpcServiceName);
+            throw registrationFailure;
+        }
+    }
+
+    @Override
+    public boolean isSlowRequest(RpcRequest request) {
+        return methodExecutionRegistry.isSlow(request);
     }
 
     @Override

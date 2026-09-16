@@ -1,8 +1,11 @@
 package com.github.hgdcoder.spring;
 
 import com.github.hgdcoder.annotation.RpcService;
+import com.github.hgdcoder.annotation.RpcSlow;
 import com.github.hgdcoder.config.RpcServiceConfig;
 import com.github.hgdcoder.provider.ServiceProvider;
+import com.github.hgdcoder.provider.impl.DefaultServiceProvider;
+import com.github.hgdcoder.remoting.dto.RpcRequest;
 import com.github.hgdcoder.transport.RpcRequestTransport;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.BeanCreationException;
@@ -65,6 +68,38 @@ class SpringBeanPostProcessorTest {
         assertTrue(error.getMessage().contains("must implement an interface"));
     }
 
+    @Test
+    void shouldRegisterSlowMethodFromUserClassWhenFinalBeanIsProxy() {
+        DefaultServiceProvider provider = new DefaultServiceProvider();
+        SpringBeanPostProcessor processor = processor(provider);
+        EchoService$$SpringCglib proxy =
+                new EchoService$$SpringCglib();
+
+        processor.postProcessBeforeInitialization(
+                proxy,
+                "echoService"
+        );
+        processor.postProcessAfterInitialization(
+                proxy,
+                "echoService"
+        );
+
+        RpcRequest request = RpcRequest.builder()
+                .requestId("spring-slow-request")
+                .interfaceName(EchoService.class.getName())
+                .methodName("slow")
+                .parameters(new Object[0])
+                .paramTypes(new Class<?>[0])
+                .group("")
+                .version("")
+                .build();
+
+        assertTrue(
+                provider.isSlowRequest(request),
+                "Spring 代理后的服务没有保留原始类上的 @RpcSlow"
+        );
+    }
+
     private SpringBeanPostProcessor processor(
             ServiceProvider serviceProvider
     ) {
@@ -87,10 +122,16 @@ class SpringBeanPostProcessorTest {
     }
 
     private interface EchoService {
+        String slow();
     }
 
     @RpcService
     private static class EchoServiceImpl implements EchoService {
+        @RpcSlow
+        @Override
+        public String slow() {
+            return "slow";
+        }
     }
 
     private static class EchoService$$SpringCglib
